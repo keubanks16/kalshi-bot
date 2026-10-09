@@ -907,3 +907,20 @@ test("transfer request uses centicents and the right shards", async () => {
   assert.equal(sent.source, "event_contract");
   assert.equal(sent.destination, "event_contract");
 });
+
+test("dashboard Move cash: moves what you ask, only if the source shard has it", async () => {
+  const a = liveMaker();
+  (a.client as any).getBalanceDetail = async () => ({ total: 59.1, byIndex: { 0: 57.64, 1: 0, 2: 1.44, 3: 0.02 } });
+  const moves: string[] = [];
+  (a.client as any).transferBetweenShards = async (f: number, t: number, d: number) => (moves.push(`${f}->${t} $${d.toFixed(2)}`), "t");
+  const ok = await a.engine.moveCash(0, 2, 40);
+  assert.ok(ok.ok, ok.message);
+  assert.deepEqual(moves, ["0->2 $40.00"]);
+  assert.match(a.store.recentDecisions(3).map((d: any) => d.reason).join(" | "), /moved \$40\.00 from Kalshi shard #0 to #2 \(from the dashboard\)/);
+
+  const tooMuch = await a.engine.moveCash(2, 0, 5);
+  assert.equal(tooMuch.ok, false);
+  assert.match(tooMuch.message, /only has \$1\.44/);
+  assert.equal((await a.engine.moveCash(2, 2, 1)).ok, false);
+  assert.equal(moves.length, 1, "nothing else moved");
+});

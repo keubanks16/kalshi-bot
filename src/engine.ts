@@ -774,6 +774,37 @@ export class Engine {
    * most cash, at most once a minute per shard. Returns what it did, or null.
    * Only ever moves money between shards of this same Kalshi account.
    */
+  /**
+   * Move cash between this account's exchange shards on request (dashboard).
+   * Checks the source shard actually holds the amount first. Returns a message.
+   */
+  async moveCash(fromShard: number, toShard: number, dollars: number): Promise<{ ok: boolean; message: string }> {
+    const now = this.clock();
+    const ok = (n: number) => Number.isInteger(n) && n >= 0 && n <= 100;
+    if (!ok(fromShard) || !ok(toShard) || fromShard === toShard) return { ok: false, message: "Pick two different shards." };
+    const amount = Math.floor(dollars * 100) / 100;
+    if (!(amount > 0)) return { ok: false, message: "Enter an amount above $0." };
+    this.cashStale = true;
+    await this.availableCash();
+    const by = this.kalshiCash?.byIndex;
+    const have = by ? (by[fromShard] ?? 0) : null;
+    if (have === null) return { ok: false, message: `Couldn't read your Kalshi balance by shard${this.kalshiCashError ? `: ${this.kalshiCashError}` : ""}.` };
+    if (amount > have + 1e-9) return { ok: false, message: `Shard #${fromShard} only has $${have.toFixed(2)}.` };
+    try {
+      await this.client.transferBetweenShards(fromShard, toShard, amount);
+    } catch (e) {
+      const text = `Moving $${amount.toFixed(2)} from shard #${fromShard} to #${toShard} failed: ${(e as Error)?.message ?? String(e)}`;
+      this.lastShardMove = { text, at: now, ok: false };
+      return { ok: false, message: text };
+    }
+    this.cashStale = true;
+    this.shardMoveAt.set(toShard, now);
+    const text = `Moved $${amount.toFixed(2)} from Kalshi shard #${fromShard} to #${toShard}.`;
+    this.lastShardMove = { text, at: now, ok: true };
+    this.store.addDecision({ ts: now, strategy: "cash", ticker: `shard #${toShard}`, action: "transfer", reason: `moved $${amount.toFixed(2)} from Kalshi shard #${fromShard} to #${toShard} (from the dashboard)` });
+    return { ok: true, message: `${text} Kalshi processes it in the background; the split updates within a minute.` };
+  }
+
   private async fundShard(toShard: number, atLeast: number): Promise<string | null> {
     const now = this.clock();
     const by = this.kalshiCash?.byIndex;

@@ -305,6 +305,13 @@ export class Bot extends DurableObject<Env> {
     };
   }
 
+  /** Move cash between Kalshi exchange shards (dashboard "Move cash" form). */
+  async moveCash(fromShard: number, toShard: number, dollars: number): Promise<string> {
+    if (!this.keysSet()) return "Add your Kalshi API keys first.";
+    const engine = await this.getEngine();
+    return (await engine.moveCash(fromShard, toShard, dollars)).message;
+  }
+
   async setKillSwitch(on: boolean): Promise<void> {
     this.store.set("kill_switch", on ? "on" : "off");
   }

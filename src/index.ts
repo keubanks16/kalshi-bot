@@ -122,6 +122,12 @@ export default {
       return home();
     }
 
+    if (req.method === "POST" && url.pathname === "/move-cash") {
+      if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+      const form = await req.formData();
+      return homeMsg(await stub.moveCash(Number(form.get("from")), Number(form.get("to")), Number(form.get("amount"))));
+    }
+
     if (req.method === "POST" && (url.pathname === "/prices" || url.pathname === "/fresh-test")) {
       if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
       const form = await req.formData();

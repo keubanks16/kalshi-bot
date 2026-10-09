@@ -250,7 +250,15 @@ ${
               .map(([i, v]) => `#${esc(i)} $${Number(v).toFixed(2)}`)
               .join(" · ")}. A bet can only use the cash on its own market's shard.`
           : ""
-      }${s.kalshiCash.lastMove ? `<br><span class="${s.kalshiCash.lastMove.ok ? "" : "err"}">${esc(s.kalshiCash.lastMove.text)} (${esc(time(s.kalshiCash.lastMove.at))})</span>` : ""}${s.kalshiCash.error ? ` · couldn't read it: ${esc(s.kalshiCash.error)}` : ""}</div>`
+      }${s.kalshiCash.lastMove ? `<br><span class="${s.kalshiCash.lastMove.ok ? "" : "err"}">${esc(s.kalshiCash.lastMove.text)} (${esc(time(s.kalshiCash.lastMove.at))})</span>` : ""}${s.kalshiCash.error ? ` · couldn't read it: ${esc(s.kalshiCash.error)}` : ""}</div>${
+        opts.authed
+          ? `<form method="post" action="/move-cash" class="limits" style="margin-top:10px"><label><span><b>Move cash</b><br><span class="sub">between your Kalshi shards (crypto trades on #2)</span></span>
+<span class="dollar">$<input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" value="40"></span></label>
+<label><span>From shard</span><select name="from">${[0, 1, 2, 3].map((i) => `<option value="${i}"${i === 0 ? " selected" : ""}>#${i}</option>`).join("")}</select></label>
+<label><span>To shard</span><select name="to">${[0, 1, 2, 3].map((i) => `<option value="${i}"${i === 2 ? " selected" : ""}>#${i}</option>`).join("")}</select></label>
+<button class="go">Move cash</button></form>`
+          : ""
+      }`
     : ""
 }
 ${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
