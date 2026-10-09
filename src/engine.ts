@@ -903,7 +903,11 @@ export class Engine {
     let placed: Order = {};
     if (mode !== "paper") {
       try {
-        const sent = await this.sendOrReconcile(m.ticker, (id) => this.client.createMakerOrder(m.ticker, o.side, contracts, o.price, expiresAt, id));
+        // Kalshi's own expiry is a backstop a little after the bot's cancel time
+        // (never past the bot's cutoff before the market closes), so the bot
+        // normally cancels it itself and logs why.
+        const kalshiExpiry = Math.min(expiresAt + 30, Math.floor(close - this.s.minSecondsLeft / 2), o.expiresAt ?? Infinity);
+        const sent = await this.sendOrReconcile(m.ticker, (id) => this.client.createMakerOrder(m.ticker, o.side, contracts, o.price, Math.max(expiresAt, kalshiExpiry), id));
         if (!sent) return (this.skipWhy = this.lastError ?? "Kalshi didn't accept the order"), none;
         placed = sent;
       } catch (e) {
@@ -1044,7 +1048,7 @@ export class Engine {
       if (r.status !== "resting") continue;
       if (r.mode !== "paper") {
         try {
-          this.syncOrder(r, await this.client.getOrder(r.order_id!), now);
+          this.syncOrder(r, await this.client.getOrder(r.order_id!, r.ticker), now);
         } catch (e) {
           if (e instanceof KalshiError && e.status === 429) throw e;
           if (e instanceof KalshiError && e.status === 404) {
@@ -1084,14 +1088,14 @@ export class Engine {
   private async cancelRestingQuietly(r: OrderRow, now: number): Promise<void> {
     if (r.mode !== "paper") {
       try {
-        const final = (await this.client.cancelOrder(r.order_id!, r.ticker)) ?? (await this.client.getOrder(r.order_id!));
+        const final = (await this.client.cancelOrder(r.order_id!, r.ticker)) ?? (await this.client.getOrder(r.order_id!, r.ticker));
         this.syncOrder(r, { ...final, status: "canceled" }, now);
         return;
       } catch (e) {
         if (e instanceof KalshiError && e.status === 429) throw e;
         // Already gone (filled, expired or cancelled): read its final state.
         try {
-          const final = await this.client.getOrder(r.order_id!);
+          const final = await this.client.getOrder(r.order_id!, r.ticker);
           this.syncOrder(r, final, now);
           if (String(final.status ?? "") === "resting") {
             this.lastError = `Couldn't cancel order on ${r.ticker}: ${(e as Error).message}. Kalshi will expire it.`;

@@ -62,17 +62,27 @@ test("cancel uses the V2 endpoint with the market for routing, then the caller r
   assert.match(calls[0].url, /\/portfolio\/events\/orders\/m1\?market_ticker=KXNCAAFGAME-Y$/);
 });
 
-test("cancel falls back to the older endpoint when V2 says not found", async () => {
+test("cancel never calls the retired V1 endpoint; 'not found' means already gone", async () => {
   const calls: string[] = [];
   const fetchFn = (async (url: string, init: RequestInit) => {
     calls.push(`${init.method} ${new URL(url).pathname}`);
     if (url.includes("/portfolio/events/orders/")) return new Response('{"error":{"code":"not_found"}}', { status: 404 });
-    return new Response(JSON.stringify({ order: { order_id: "m1", status: "canceled", fill_count_fp: "2.00" } }));
+    return new Response('{"error":{"code":"deprecated_v1_order_endpoint"}}', { status: 410 });
   }) as unknown as typeof fetch;
   const client = new KalshiClient("https://example.test/trade-api/v2", "", null, fetchFn);
-  const o = await client.cancelOrder("m1", "T");
-  assert.deepEqual(calls, ["DELETE /trade-api/v2/portfolio/events/orders/m1", "DELETE /trade-api/v2/portfolio/orders/m1"]);
-  assert.equal(orderFilled(o!), 2);
+  assert.equal(await client.cancelOrder("m1", "T"), null);
+  assert.deepEqual(calls, ["DELETE /trade-api/v2/portfolio/events/orders/m1"]);
+});
+
+test("order lookup falls back to listing the market's orders", async () => {
+  const fetchFn = (async (url: string) => {
+    if (/\/portfolio\/orders\/m1$/.test(new URL(url).pathname)) return new Response('{"error":{"code":"deprecated_v1_order_endpoint"}}', { status: 410 });
+    return new Response(JSON.stringify({ orders: [{ order_id: "x" }, { order_id: "m1", status: "canceled", fill_count_fp: "2.00" }] }));
+  }) as unknown as typeof fetch;
+  const client = new KalshiClient("https://example.test/trade-api/v2", "", null, fetchFn);
+  const o = await client.getOrder("m1", "T");
+  assert.equal(o.status, "canceled");
+  assert.equal(orderFilled(o), 2);
 });
 
 test("fills record: sums contracts and fees for one order", async () => {

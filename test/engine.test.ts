@@ -962,3 +962,13 @@ test("every cancelled bid is logged with its reason", async () => {
   await b.again(10);
   assert.match(b.store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /cancelled bid for \d+ YES @ \$0\.54: edge at this price is now -/);
 });
+
+test("maker bids: the bot cancels before Kalshi's own expiry, which stays as a backstop", async () => {
+  const a = liveMaker();
+  await a.again();
+  const post = a.calls.find((c) => c.startsWith("post"))!;
+  const kalshiExp = Number(post.split("exp ")[1]);
+  const botExp = a.store.restingOrders("live")[0].expires_ts;
+  assert.ok(kalshiExp > botExp, `Kalshi expiry ${kalshiExp} after the bot's ${botExp}`);
+  assert.ok(kalshiExp - botExp <= 30);
+});

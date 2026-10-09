@@ -377,24 +377,32 @@ export class KalshiClient {
     return (d.orders ?? []).find((o) => o.client_order_id === clientOrderId) ?? null;
   }
 
-  async getOrder(orderId: string): Promise<Order> {
-    return (await this.request<{ order: Order }>("GET", `/portfolio/orders/${orderId}`)).order ?? {};
+  /** One order by id. Falls back to listing the market's orders if the single-order lookup is unavailable. */
+  async getOrder(orderId: string, ticker?: string): Promise<Order> {
+    try {
+      return (await this.request<{ order: Order }>("GET", `/portfolio/orders/${orderId}`)).order ?? {};
+    } catch (e) {
+      if (!(e instanceof KalshiError && (e.status === 404 || e.status === 410)) || !ticker) throw e;
+      const d = await this.request<{ orders?: Order[] }>("GET", "/portfolio/orders", { ticker, limit: 200 });
+      const hit = (d.orders ?? []).find((o) => o.order_id === orderId);
+      if (!hit) throw e;
+      return hit;
+    }
   }
 
   /** Cancel a resting order. Returns the order as it ended (with its final fill count) when Kalshi sends it. */
   async cancelOrder(orderId: string, ticker?: string): Promise<Order | null> {
     // V2 cancel replies with only the amount cancelled, not the order, so
     // return null and let the caller read the final order (with its fills).
+    // "Not found" means the order is already gone (it filled, or Kalshi's own
+    // expiry removed it). That's success for a cancel; the caller then reads
+    // the final order to book any fills. (The old V1 cancel is retired: 410.)
     try {
       await this.request("DELETE", `/portfolio/events/orders/${orderId}`, { market_ticker: ticker });
-      return null;
     } catch (e) {
-      // "Not found" from V2 can mean it routed the cancel wrong; the older
-      // cancel endpoint is still live, so try it before giving up.
-      if (!(e instanceof KalshiError && e.status === 404)) throw e;
-      const d = await this.request<{ order?: Order }>("DELETE", `/portfolio/orders/${orderId}`);
-      return d.order ?? null;
+      if (!(e instanceof KalshiError && (e.status === 404 || e.status === 410))) throw e;
     }
+    return null;
   }
 
   /** What actually filled on an order, from Kalshi's fills record (works even after the order is gone). */
