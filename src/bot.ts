@@ -3,7 +3,7 @@
 // schedules the next. A once-a-minute cron makes sure the alarm is running.
 
 import { DurableObject } from "cloudflare:workers";
-import { HORIZONS, LIMIT_FIELDS, STRATEGIES, STRATEGY_SWITCHES, baseUrl, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, type Mode, type Strategy, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
+import { HORIZONS, LIMIT_FIELDS, MODE_LIMIT_FIELDS, SHARED_LIMIT_FIELDS, type LimitSet, STRATEGIES, STRATEGY_SWITCHES, baseUrl, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, type Mode, type Strategy, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
 import { Engine, tradingDay } from "./engine.ts";
 import { KalshiClient, importPrivateKey } from "./kalshi.ts";
 import { PriceFeed } from "./prices.ts";
@@ -36,7 +36,8 @@ export interface Snapshot {
   killSwitch: boolean;
   horizon: string;
   horizons: { key: string; label: string; short: string }[];
-  limits: { key: string; label: string; help: string; value: number; dflt: number }[];
+  limits: { key: string; label: string; help: string; value: number; dflt: number }[]; // shared (AI spend)
+  limitsByMode?: Record<LimitSet, { key: string; label: string; help: string; value: number; dflt: number }[]>;
   modelWeight?: { value: number; dflt: number; options: number[] };
   modelCheck?: { settled: number; expectedWins: number; actualWins: number; avgPrice: number };
   ai?: {
@@ -180,6 +181,7 @@ export class Bot extends DurableObject<Env> {
       horizon,
       horizons: Object.entries(HORIZONS).map(([key, h]) => ({ key, label: h.label, short: h.short })),
       limits: this.limitRows(),
+      limitsByMode: { paper: this.limitRows("paper"), live: this.limitRows("live") },
       modelWeight: { value: this.modelWeight(), dflt: this.settings.modelWeight, options: MODEL_WEIGHT_OPTIONS },
       summary: this.store.summary(view, since),
       testSince,
@@ -240,20 +242,47 @@ export class Bot extends DurableObject<Env> {
     }
   }
 
-  private limitRows() {
-    const dflt = limitsOf(this.settings);
-    const current = { ...dflt, ...this.savedLimits() };
-    return LIMIT_FIELDS.map((f) => ({ key: f.key, label: f.label, help: f.help, value: current[f.key], dflt: dflt[f.key] }));
+  private savedSet(set: LimitSet): Partial<Limits> {
+    try {
+      return cleanLimits(JSON.parse(this.store.get(`limits_${set}`) ?? "{}"));
+    } catch {
+      return {};
+    }
   }
 
-  /** Save spending limits from the dashboard; blank or invalid fields keep their current value. */
-  async setLimits(raw: Record<string, unknown>): Promise<void> {
-    this.store.set("limits", JSON.stringify({ ...this.savedLimits(), ...cleanLimits(raw) }));
+  /** Rows for one mode's limits, or (no set) the shared ones. Each set falls back to the shared/default values. */
+  private limitRows(set?: LimitSet) {
+    const dflt = limitsOf(this.settings);
+    const shared = { ...dflt, ...this.savedLimits() };
+    if (!set) return SHARED_LIMIT_FIELDS.map((f) => ({ key: f.key, label: f.label, help: f.help, value: shared[f.key], dflt: dflt[f.key] }));
+    const current = { ...shared, ...this.savedSet(set) };
+    return MODE_LIMIT_FIELDS.map((f) => ({ key: f.key, label: f.label, help: f.help, value: current[f.key], dflt: shared[f.key] }));
+  }
+
+  /**
+   * Save spending limits from the dashboard; blank or invalid fields keep their
+   * current value. With a set, saves that mode's limits; without, the shared ones.
+   */
+  async setLimits(raw: Record<string, unknown>, set?: LimitSet): Promise<void> {
+    const clean = cleanLimits(raw);
+    if (set) {
+      const own = Object.fromEntries(MODE_LIMIT_FIELDS.filter((f) => clean[f.key] !== undefined).map((f) => [f.key, clean[f.key]]));
+      this.store.set(`limits_${set}`, JSON.stringify({ ...this.savedSet(set), ...own }));
+    } else {
+      const shared = Object.fromEntries(SHARED_LIMIT_FIELDS.filter((f) => clean[f.key] !== undefined).map((f) => [f.key, clean[f.key]]));
+      this.store.set("limits", JSON.stringify({ ...this.savedLimits(), ...shared }));
+    }
     this.engine?.applyOverrides();
   }
 
-  async resetLimits(): Promise<void> {
-    this.store.set("limits", "{}");
+  /** Reset one mode's limits to the defaults (or, with no set, the shared AI limit). */
+  async resetLimits(set?: LimitSet): Promise<void> {
+    if (set) this.store.set(`limits_${set}`, "{}");
+    else {
+      const keep = this.savedLimits();
+      for (const f of SHARED_LIMIT_FIELDS) delete keep[f.key];
+      this.store.set("limits", JSON.stringify(keep));
+    }
     this.engine?.applyOverrides();
   }
 

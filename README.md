@@ -76,6 +76,8 @@ A shorter limit means your money comes back sooner. Changing the limit applies o
 
 The dollar limits below can be changed any time from the dashboard's **Spending limits** card (sign in first). Changes apply on the next round, and **Reset to defaults** goes back to the values in `wrangler.jsonc`.
 
+The card has separate **Live** and **Paper** sections, so practice can run with a big bankroll while real money stays small. Each mode has its own bankroll, per-trade, per-market, per-event, open-at-once and daily-loss limits. Any field you haven't set falls back to the shared default. Max AI spend is one shared setting, because Claude costs real money in either mode. A strategy trading in demo uses the live limits.
+
 | Guard | Default |
 |---|---|
 | Max per trade | $5 |

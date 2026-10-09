@@ -110,8 +110,11 @@ export default {
       if (url.pathname === "/kill") await stub.setKillSwitch(form.get("on") === "on");
       else if (url.pathname === "/horizon") await stub.setHorizon(String(form.get("horizon") ?? ""));
       else if (url.pathname === "/model") await stub.setModelWeight(Number(form.get("weight")));
-      else if (form.get("reset") === "1") await stub.resetLimits();
-      else await stub.setLimits(Object.fromEntries([...form.entries()].map(([k, v]) => [k, String(v)])));
+      else {
+        const set = form.get("set") === "paper" || form.get("set") === "live" ? (form.get("set") as "paper" | "live") : undefined;
+        if (form.get("reset") === "1") await stub.resetLimits(set);
+        else await stub.setLimits(Object.fromEntries([...form.entries()].map(([k, v]) => [k, String(v)])), set);
+      }
       return home();
     }
 

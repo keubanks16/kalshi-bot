@@ -227,6 +227,15 @@ export type Limits = Record<LimitKey, number>;
 
 export const MAX_LIMIT = 100_000;
 
+/** Limits kept separately for paper and live trading (AI spend is shared: it's real money either way). */
+export const MODE_LIMIT_FIELDS = LIMIT_FIELDS.filter((f) => f.key !== "aiDailyBudget");
+export const SHARED_LIMIT_FIELDS = LIMIT_FIELDS.filter((f) => f.key === "aiDailyBudget");
+export type LimitSet = "paper" | "live";
+/** Which limit set a trading mode uses (demo trades with live's limits). */
+export function limitSetOf(mode: string): LimitSet {
+  return mode === "paper" ? "paper" : "live";
+}
+
 export function limitsOf(s: Settings): Limits {
   return Object.fromEntries(LIMIT_FIELDS.map((f) => [f.key, s[f.key]])) as Limits;
 }

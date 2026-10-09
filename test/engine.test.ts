@@ -585,3 +585,63 @@ test("maker: limits hold over many ticks with fills", async () => {
   }
   assert.ok(store.openRisk("paper") <= 50 + 1e-9);
 });
+
+// ------------------------------------------------------------ paper vs live limits
+test("paper and live each use their own spending limits", async () => {
+  const { engine, store, client } = setup();
+  (client as any).createOrder = async (_t: string, _s: string, count: number) => ({ order_id: `o${Math.random()}`, fill_count: count, taker_fees_dollars: "0.01" });
+  (client as any).getBalance = async () => 500;
+  store.set("strategy_modes", JSON.stringify({ crypto: "live" })); // crypto live, arbitrage paper
+  store.set("limits_live", JSON.stringify({ maxCostPerOrder: 1 }));
+  store.set("limits_paper", JSON.stringify({ maxCostPerOrder: 8, bogus: 9 }));
+  await engine.tick();
+  assert.equal(engine.limitsFor("live").maxCostPerOrder, 1);
+  assert.equal(engine.limitsFor("paper").maxCostPerOrder, 8);
+  assert.equal(engine.limitsFor("paper").maxOpenRisk, 50, "unset fields fall back to the shared value");
+  const trades = store.openTrades();
+  const live = trades.filter((t) => t.mode === "live");
+  const paper = trades.filter((t) => t.mode === "paper");
+  assert.ok(live.length && live.every((t) => t.cost <= 1 + 1e-9), "live capped at $1");
+  assert.ok(paper.length && paper.every((t) => t.cost <= 8 + 1e-9), "paper capped at $8");
+  assert.ok(paper.some((t) => t.cost > 1), "paper not held to the live cap");
+});
+
+test("each mode sizes bets from its own bankroll", async () => {
+  const { engine, store, client } = setup();
+  (client as any).getBalance = async () => 1000;
+  store.set("limits_live", JSON.stringify({ bankroll: 40 }));
+  store.set("limits_paper", JSON.stringify({ bankroll: 250 }));
+  engine.applyOverrides();
+  assert.equal(await engine.bankroll("live"), 40, "live never sizes off more than its bankroll");
+  assert.equal(await engine.bankroll("paper"), 250);
+});
+
+test("old single set of limits still applies to both modes until a mode gets its own", async () => {
+  const { engine, store } = setup();
+  store.set("limits", JSON.stringify({ maxCostPerOrder: 2 }));
+  engine.applyOverrides();
+  assert.equal(engine.limitsFor("paper").maxCostPerOrder, 2);
+  assert.equal(engine.limitsFor("live").maxCostPerOrder, 2);
+  store.set("limits_live", JSON.stringify({ maxCostPerOrder: 4 }));
+  engine.applyOverrides();
+  assert.equal(engine.limitsFor("live").maxCostPerOrder, 4);
+  assert.equal(engine.limitsFor("paper").maxCostPerOrder, 2);
+});
+
+test("dashboard shows separate live and paper limit forms", () => {
+  const row = (key: string, value: number) => ({ key, label: key, help: "", value, dflt: value });
+  const html = renderDashboard(
+    {
+      mode: "paper", problem: null, status: "ok", lastError: null, alive: true, killSwitch: false, horizon: "day",
+      horizons: [{ key: "day", label: "Within a day" }] as any,
+      limits: [row("aiDailyBudget", 2)],
+      limitsByMode: { live: [row("maxCostPerOrder", 1)], paper: [row("maxCostPerOrder", 5)] },
+      summary: { trades: 0, settled: 0, wins: 0, pnl: 0, fees: 0, openCost: 0 }, today: 0,
+      byStrategy: [], trades: [], decisions: [], timezone: "America/New_York", diag: {},
+    } as any,
+    { authed: true, passwordSet: true },
+  );
+  assert.ok(html.includes('name="set" value="live"') && html.includes('name="set" value="paper"'));
+  assert.ok(html.includes("Save live limits") && html.includes("Save paper limits"));
+  assert.ok(html.includes("Live (real money)") && html.includes("Paper (practice)"));
+});

@@ -7,7 +7,7 @@
 // Work per tick is capped so it fits Cloudflare's per-invocation subrequest
 // limit; the full market list is covered over several ticks.
 
-import { HORIZONS, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, type Mode, type Settings, type Strategy } from "./config.ts";
+import { HORIZONS, MODE_LIMIT_FIELDS, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, limitSetOf, type Limits, type Mode, type Settings, type Strategy } from "./config.ts";
 import { KalshiClient, KalshiError, askSize, dollars, makerQuotes, orderFilled, seriesOf, ts, type Market, type Order } from "./kalshi.ts";
 import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, requiredEdge, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
 import type { PriceFeed } from "./prices.ts";
@@ -81,6 +81,22 @@ export class Engine {
   lastError: string | null = null;
   heartbeat = 0;
   private bankrollCache = new Map<string, { value: number; at: number }>();
+  private modeLimits: Partial<Record<"paper" | "live", Partial<Limits>>> = {};
+  private modeLimitsPrev: Partial<Record<"paper" | "live", Partial<Limits>>> = {};
+  /** Spending limits in force for a mode: its own saved set, else the shared/default ones. */
+  limitsFor(mode: Mode): Limits {
+    const own = this.modeLimits[limitSetOf(mode)] ?? {};
+    const s = this.s;
+    return {
+      bankroll: own.bankroll ?? s.bankroll,
+      maxCostPerOrder: own.maxCostPerOrder ?? s.maxCostPerOrder,
+      maxCostPerMarket: own.maxCostPerMarket ?? s.maxCostPerMarket,
+      maxCostPerEvent: own.maxCostPerEvent ?? s.maxCostPerEvent,
+      maxOpenRisk: own.maxOpenRisk ?? s.maxOpenRisk,
+      maxDailyLoss: own.maxDailyLoss ?? s.maxDailyLoss,
+      aiDailyBudget: s.aiDailyBudget,
+    };
+  }
   /** Per-strategy paper/live choice from the dashboard. */
   strategyModes: Partial<Record<Strategy, Mode>> = {};
   private eventLookups = 0;
@@ -132,6 +148,20 @@ export class Engine {
     } catch {}
     this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride, ...(range ?? {}), ...switches };
     if (prevMode && prevMode !== this.s.mode) this.bankrollCache.clear();
+    // Paper and live each have their own spending limits on top of the shared ones.
+    this.modeLimits = {};
+    for (const set of ["paper", "live"] as const) {
+      let raw: Record<string, unknown> = {};
+      try {
+        raw = JSON.parse(this.store.get(`limits_${set}`) ?? "{}");
+      } catch {}
+      const clean = cleanLimits(raw);
+      const own = Object.fromEntries(MODE_LIMIT_FIELDS.filter((f) => clean[f.key] !== undefined).map((f) => [f.key, clean[f.key]]));
+      this.modeLimits[set] = own;
+    }
+    // A changed bankroll should take effect now, not after the cache expires.
+    if (JSON.stringify(this.modeLimits) !== JSON.stringify(this.modeLimitsPrev)) this.bankrollCache.clear();
+    this.modeLimitsPrev = this.modeLimits;
     try {
       this.strategyModes = cleanStrategyModes(JSON.parse(this.store.get("strategy_modes") ?? "{}"), this.base.mode);
     } catch {
@@ -654,10 +684,10 @@ export class Engine {
     let value: number;
     if (mode !== "paper") {
       // Never size off more than the configured bankroll, even if the account holds more.
-      value = Math.min(await this.client.getBalance(), this.s.bankroll);
+      value = Math.min(await this.client.getBalance(), this.limitsFor(mode).bankroll);
     } else {
       const sum = this.store.summary("paper");
-      value = this.s.bankroll + sum.pnl - sum.openCost;
+      value = this.limitsFor(mode).bankroll + sum.pnl - sum.openCost;
     }
     this.bankrollCache.set(mode, { value, at: this.clock() });
     return value;
@@ -665,7 +695,7 @@ export class Engine {
 
   /** Dollars the risk limits still allow on this event (and market, if given), counted within one mode. */
   room(eventTicker: string, ticker: string | null, mode: Mode = this.s.mode): number {
-    const s = this.s;
+    const s = { ...this.s, ...this.limitsFor(mode) };
     let room = Math.min(
       s.maxCostPerEvent - this.store.eventExposure(eventTicker, mode),
       s.maxOpenRisk - this.store.openRisk(mode),

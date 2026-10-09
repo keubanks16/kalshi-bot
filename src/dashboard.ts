@@ -217,17 +217,24 @@ ${g.books ? `<span>Books: ${esc(g.books)} · Kalshi: ${esc(g.kalshi)}</span><br>
     : ""
 }</div>`;
 
-  const limitsCard = opts.authed
-    ? `<form method="post" action="/limits" class="limits">${s.limits
-        .map(
-          (l) => `<label><span><b>${esc(l.label)}</b><br><span class="sub">${esc(l.help)}</span></span>
+  // Paper and live each get their own limits; AI spend is shared (real money either way).
+  type LimitRow = Snapshot["limits"][number];
+  const limitForm = (rows: LimitRow[], set: string | null) =>
+    opts.authed
+      ? `<form method="post" action="/limits" class="limits">${set ? `<input type="hidden" name="set" value="${set}">` : ""}${rows
+          .map(
+            (l) => `<label><span><b>${esc(l.label)}</b><br><span class="sub">${esc(l.help)}</span></span>
   <span class="dollar">$<input name="${esc(l.key)}" type="number" inputmode="decimal" min="0.01" step="0.01" value="${l.value}"></span></label>`,
-        )
-        .join("")}<button class="go">Save limits</button></form>
-<form method="post" action="/limits"><input type="hidden" name="reset" value="1"><button class="link">Reset to defaults</button></form>`
-    : `<div class="limits">${s.limits
-        .map((l) => `<div class="row"><span>${esc(l.label)}</span><b>$${l.value.toFixed(2)}</b></div>`)
-        .join("")}</div>`;
+          )
+          .join("")}<button class="go">Save ${set ? `${set} limits` : "limit"}</button></form>
+<form method="post" action="/limits">${set ? `<input type="hidden" name="set" value="${set}">` : ""}<input type="hidden" name="reset" value="1"><button class="link">Reset ${set ?? "AI limit"} to defaults</button></form>`
+      : `<div class="limits">${rows.map((l) => `<div class="row"><span>${esc(l.label)}</span><b>$${l.value.toFixed(2)}</b></div>`).join("")}</div>`;
+  const byMode = s.limitsByMode;
+  const limitsCard = byMode
+    ? `<div class="k" style="margin-top:4px">Live (real money)</div>${limitForm(byMode.live, "live")}
+<div class="k" style="margin-top:22px">Paper (practice)</div>${limitForm(byMode.paper, "paper")}
+${s.limits.length ? `<div class="k" style="margin-top:22px">Shared</div>${limitForm(s.limits, null)}` : ""}`
+    : limitForm(s.limits, null);
 
   return `<!doctype html>
 <html lang="en"><head>
@@ -302,7 +309,7 @@ ${modelCard}
 
 ${priceCard}
 
-${s.limits.length ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
+${s.limits.length || s.limitsByMode ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
 
 ${testBar}
 ${viewSwitch}
