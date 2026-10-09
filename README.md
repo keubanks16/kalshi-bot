@@ -46,7 +46,8 @@ A bot can only find a good trade when it has a source of truth that's better tha
 - PrizePicks' lines come from The Odds API (bookmaker `prizepicks` in the `us_dfs` region), the same `ODDS_API_KEY`, so the bot never touches PrizePicks' own site. Each request returns PrizePicks' lines and the sportsbooks' player-prop odds for one game.
 - It removes the books' margin to get the chance each More/Less hits. If no book has PrizePicks' exact line, a book line further out gives a safe minimum, shown as "≥". Only standard lines are used (goblins and demons are left out).
 - It lists the top picks and the best 2–6 pick power plays (one pick per game), with the expected profit per $1 from `PRIZEPICKS_POWER_PAYOUTS`.
-- Each game costs stat types × regions credits (3 × 2 = 6 by default), soonest games first, re-checked every 2 hours, capped by `PRIZEPICKS_DAILY_CREDITS` (default 60, about 10 games a day). Raise it if your Odds API plan allows.
+- It only checks when you tap **Check now** on the tab (`PRIZEPICKS_INTERVAL_MINUTES` = 0), so credits are spent only when you're looking. Set it to e.g. 120 to check every 2 hours instead. A second tap within 10 minutes reuses the last results for free.
+- Each game costs stat types × regions credits (3 × 2 = 6 by default), soonest games first, with `PRIZEPICKS_DAILY_CREDITS` (default 300) as a daily safety ceiling.
 
 **Strategy switches:** the dashboard's **Strategies** card turns Crypto, AI forecaster, Sports and Arbitrage on or off instantly. Open bets stay open and settle normally.
 

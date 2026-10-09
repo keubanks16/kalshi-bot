@@ -199,7 +199,7 @@ export function loadPicksSettings(env: Env): PicksSettings {
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean),
-    intervalMinutes: num(env, "PRIZEPICKS_INTERVAL_MINUTES", 120),
+    intervalMinutes: num(env, "PRIZEPICKS_INTERVAL_MINUTES", 0),
     dailyCredits: num(env, "PRIZEPICKS_DAILY_CREDITS", 60),
     regions: str(env, "PRIZEPICKS_REGIONS", "us,us_dfs"),
     hoursAhead: num(env, "PRIZEPICKS_HOURS_AHEAD", 24),

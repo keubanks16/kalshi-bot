@@ -70,7 +70,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.10.2";
+export const VERSION = "0.10.3";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
@@ -175,7 +175,7 @@ export class Bot extends DurableObject<Env> {
 
   async setPicks(action: string): Promise<void> {
     if (action === "on" || action === "off") this.store.set("picks_enabled", action);
-    if (action === "refresh" || action === "on") this.store.set("picks_last_ts", "0");
+    if (action === "refresh" || action === "on") this.picks.request();
     this.runPicks();
   }
 

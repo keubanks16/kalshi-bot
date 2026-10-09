@@ -152,6 +152,25 @@ test("scanner: respects the daily credit cap and the dashboard switch", async ()
   assert.equal(sc.due(NOW + 86400), false);
 });
 
+test("scanner: with interval 0 it only runs when Check now is tapped, and a quick second tap is free", async () => {
+  const store = kv();
+  const calls: string[] = [];
+  const sc = new PicksScanner(settings({ intervalMinutes: 0 }), store, "k", fakeFetch(calls) as any);
+  assert.equal(sc.due(NOW), false); // never on its own, even the first time
+  sc.request();
+  assert.equal(sc.due(NOW), true);
+  const v = await sc.run(NOW);
+  assert.doesNotMatch(v.status, /Next check/);
+  assert.equal(sc.due(NOW + 86400), false); // request is used up
+  sc.request();
+  await sc.run(NOW + 300); // 5 minutes later: reuse
+  assert.equal(calls.filter((u) => u.includes("/odds")).length, 1);
+  sc.request();
+  await sc.run(NOW + 900); // 15 minutes later: fresh odds
+  assert.equal(calls.filter((u) => u.includes("/odds")).length, 2);
+  assert.equal(sc.creditsToday(NOW), 12);
+});
+
 test("scanner: an Odds API error shows up as the status", async () => {
   const sc = new PicksScanner(settings(), kv(), "k", (async () => new Response("bad key", { status: 401 })) as any);
   const v = await sc.run(NOW);

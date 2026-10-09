@@ -15,7 +15,7 @@ export interface PicksSettings {
   enabled: boolean;
   sports: string[]; // The Odds API sport keys
   markets: string[]; // Odds API player-prop market keys to price
-  intervalMinutes: number;
+  intervalMinutes: number; // 0 = only when you tap "Check now" on the dashboard
   dailyCredits: number; // Odds API credits this finder may use per day (separate from Kalshi sports)
   regions: string; // must include us_dfs (PrizePicks) and a sportsbook region
   hoursAhead: number;
@@ -310,8 +310,20 @@ export class PicksScanner {
     return Number(this.store.get(`pp_credits_${dayOf(now, this.s.timezone)}`) ?? 0);
   }
 
+  /** Ask for a check on the next round ("Check now" on the dashboard). */
+  request(): void {
+    this.store.set("picks_requested", "1");
+  }
+
   due(now: number): boolean {
-    return this.enabled() && !!this.oddsKey && now - Number(this.store.get("picks_last_ts") ?? 0) >= this.s.intervalMinutes * 60;
+    if (!this.enabled() || !this.oddsKey) return false;
+    if (this.store.get("picks_requested") === "1") return true;
+    return this.s.intervalMinutes > 0 && now - Number(this.store.get("picks_last_ts") ?? 0) >= this.s.intervalMinutes * 60;
+  }
+
+  /** How long a game's props are reused before paying for them again. */
+  private reuseSeconds(): number {
+    return this.s.intervalMinutes > 0 ? this.s.intervalMinutes * 60 : 10 * 60;
   }
 
   private async json(url: string): Promise<{ body: any; res: Response }> {
@@ -322,6 +334,7 @@ export class PicksScanner {
 
   async run(now: number): Promise<PicksView> {
     this.store.set("picks_last_ts", String(now));
+    this.store.set("picks_requested", "0");
     const creditKey = `pp_credits_${dayOf(now, this.s.timezone)}`;
     let used = Number(this.store.get(creditKey) ?? 0);
     const regions = this.s.regions.split(",").map((r) => r.trim()).filter(Boolean);
@@ -360,7 +373,7 @@ export class PicksScanner {
       // 2. PrizePicks lines + sportsbook props per game (paid), soonest first, reusing recent results.
       for (const ev of soon) {
         let entry: CacheEntry | undefined = cache[ev.id];
-        const fresh = entry && now - entry.ts < this.s.intervalMinutes * 60 && this.s.markets.every((m) => entry!.markets.includes(m));
+        const fresh = entry && now - entry.ts < this.reuseSeconds() && this.s.markets.every((m) => entry!.markets.includes(m));
         if (!fresh) {
           if (used + cost > this.s.dailyCredits) {
             budgetHit = true;
@@ -419,7 +432,7 @@ export class PicksScanner {
             : `No ${sports} games in the next ${this.s.hoursAhead} hours.`
           : !linesSeen
             ? `Checked ${games} ${sports} game${games > 1 ? "s" : ""}, but PrizePicks has no lines posted for them yet${budget}.`
-            : `Priced ${priced} of ${linesSeen} PrizePicks lines in ${games} ${sports} game${games > 1 ? "s" : ""}${budget}. Next check in ${this.s.intervalMinutes} min.${problems.length ? ` (${problems.join(" · ")})` : ""}`;
+            : `Priced ${priced} of ${linesSeen} PrizePicks lines in ${games} ${sports} game${games > 1 ? "s" : ""}${budget}.${this.s.intervalMinutes > 0 ? ` Next check in ${this.s.intervalMinutes} min.` : ""}${problems.length ? ` (${problems.join(" · ")})` : ""}`;
     const v: PicksView = { ts: now, status, picks: picks.slice(0, 40), slips, linesSeen, priced };
     this.store.set("picks_view", JSON.stringify(v));
     return v;

@@ -24,7 +24,7 @@ export function renderPicks(s: Snapshot, opts: { authed: boolean }, f: Fmt): str
     ? "Off: add the ODDS_API_KEY secret (the-odds-api.com) — the same key your Kalshi sports strategy uses."
     : !pp.on
       ? "Off."
-      : (v?.status ?? "Waiting for the first check (runs within a minute)…");
+      : (v?.status ?? (pp.intervalMinutes > 0 ? "Waiting for the first check (runs within a minute)…" : "Tap Check now to look for picks."));
 
   const controls = opts.authed
     ? `<div class="pp-ctl">${
@@ -37,7 +37,7 @@ export function renderPicks(s: Snapshot, opts: { authed: boolean }, f: Fmt): str
 
   const head = `<div class="card"><div class="k">PrizePicks finder</div>
 <div>${esc(status)}</div>
-<div class="sub" style="margin-top:4px">${v?.ts ? `Last checked ${esc(time(v.ts))} · ` : ""}Odds credits today ${pp.creditsToday} of ${pp.creditBudget}${
+<div class="sub" style="margin-top:4px">${v?.ts ? `Last checked ${esc(date(v.ts))} ${esc(time(v.ts))} · ` : ""}${pp.intervalMinutes > 0 ? "" : "Checks only when you tap Check now · "}Odds credits today ${pp.creditsToday} of ${pp.creditBudget}${
     pp.remaining !== null ? ` · ${pp.remaining} left on your Odds API plan` : ""
   }</div>
 <div class="sub" style="margin-top:4px">Finds picks only. You place them yourself in the PrizePicks app.</div>${controls}</div>`;
