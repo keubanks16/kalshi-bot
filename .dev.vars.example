@@ -1,0 +1,7 @@
+# Only for running locally with `npm run dev`. Copy to .dev.vars (never committed).
+# In production, set these as secrets in the Cloudflare dashboard instead.
+KALSHI_API_KEY_ID=
+KALSHI_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+...
+-----END RSA PRIVATE KEY-----"
+DASHBOARD_PASSWORD=

@@ -1,145 +1,133 @@
-# Kalshi BTC 15-Minute Bot
+# Kalshi Bot
 
-An automated trader for Kalshi's **"BTC price up in next 15 mins?"** markets (`KXBTC15M`), with a dashboard you can check from your phone.
+An automated Kalshi trader that runs on **Cloudflare Workers**. It scans every open Kalshi market and trades only where it has a real reason to think the price is wrong. A dashboard you can use from your phone shows what it's doing and lets you control it.
 
-It starts in **paper mode** — real Kalshi prices, simulated trades, no money and no API keys — so you can watch how it would have done before risking anything.
+It starts in **paper mode**: real Kalshi prices, simulated trades, no money and no API keys.
 
-## How it decides
+## What it trades
 
-Each KXBTC15M market resolves YES if the 60-second average of the CF Benchmarks BTC index at the end of the 15 minutes is at or above the average at the start (the "target price").
+A bot can only find a good trade when it has a source of truth that's better than the market price. For most Kalshi markets (politics, sports, culture) it has none, so it leaves them alone. It runs two strategies that do have an edge source:
 
-Every few seconds the bot:
+**1. Crypto price markets** — BTC, ETH, SOL, XRP and DOGE, at any timeframe (15-minute, hourly, daily…) and any strike type: above, below, or between.
 
-1. **Finds the live market** and its target price (strike).
-2. **Gets BTC's price now** — the median of Coinbase, Kraken and Bitstamp, a close stand-in for the CF Benchmarks index.
-3. **Measures volatility** from the last two hours of 1-minute candles (recent minutes weighted more).
-4. **Computes a fair probability** that BTC finishes above the strike, treating price as a random walk and accounting for the 60-second settlement average. See `kalshi_bot/model.py`.
-5. **Compares it to Kalshi's prices.** If YES (or NO) is cheaper than fair by more than `MIN_EDGE` *after Kalshi's taker fee*, it buys.
-6. **Sizes the bet** with quarter-Kelly on your bankroll, then shrinks it to fit every risk limit.
-7. **Holds to settlement**, then records the win or loss.
+- It gets the coin's live price (the median of Coinbase, Kraken, Bitstamp and Gemini) and its recent volatility.
+- It computes the probability the price finishes past the strike, accounting for Kalshi's 60-second settlement average.
+- If YES or NO is cheaper than that probability by more than `MIN_EDGE` after fees, it buys. It sizes the bet with quarter-Kelly.
+- It skips markets that depend on whether a price is touched at any time, since those can't be priced this way.
 
-It stays out of the first minute (strike just set, thin books), the last two minutes (the settlement averaging window), and any price below 5¢ or above 95¢.
+**2. Arbitrage on any market** — some events have outcomes where at most one can win, like which month the Fed cuts rates. If the YES bids across those outcomes add up to more than $1, buying NO on each one locks in a profit whatever happens.
 
-## Safety built in
+- It only buys NO baskets, which pay off even if the outcome list isn't complete.
+- It only trades when the locked-in profit after fees is at least `MIN_ARB_PROFIT` per set.
+- These opportunities are rare. Most of the time it will find none.
+
+Everything is held to settlement and then marked as a win or loss.
+
+## Time limit
+
+On the dashboard you choose how soon a market must close for the bot to trade it:
+
+| Setting | Trades markets closing… |
+|---|---|
+| 1 hour | within the next hour |
+| 1 day | within 24 hours (default) |
+| 1 week | within 7 days |
+| 1 month | within 31 days |
+| Any time | no limit |
+
+A shorter limit means your money comes back sooner. Changing the limit applies on the next scan, and trades already open are kept.
+
+## Safety
 
 | Guard | Default |
 |---|---|
-| Mode | `paper` — live trading needs `BOT_MODE=live` **and** `LIVE_TRADING_CONFIRM=yes` |
+| Mode | `paper`. Live needs `BOT_MODE=live` **and** `LIVE_TRADING_CONFIRM=yes` |
 | Max contracts per order | 10 |
 | Max spent per market | $10 |
-| Max orders per market | 3 |
+| Max spent per event | $20 |
+| Max total money in open trades | $50 |
 | Daily loss limit (losses + money at risk) | $25 |
+| Max orders per market | 3 |
 | Bankroll used for sizing | $100, even if your account holds more |
-| Orders | Limit at the ask, immediate-or-cancel — never resting, never chasing |
+| Orders | Limit at the ask, immediate-or-cancel. Never resting, never chasing |
 | Kill switch | One button on the dashboard |
+
+## How it runs on Cloudflare
+
+- A **Durable Object** holds the bot and its own SQLite database. An alarm wakes it every 10 seconds to run one round.
+- Each round scans one page of open markets, looking for arbitrage and new crypto markets. It then re-prices up to 3 crypto series that are due: short-dated ones every 10 seconds, long-dated ones every few minutes. The full market list is covered over several rounds.
+- A **cron** runs once a minute only to make sure the loop is alive. That covers restarts after deploys.
+- The **Worker** serves the dashboard at your `*.workers.dev` address.
+
+**Cost:** the defaults are sized to fit Cloudflare's free plan, which allows 100k Durable Object requests and 100k rows written per day. If the dashboard shows errors about limits, switch to Workers Paid ($5/month).
+
+## Deploy (no computer setup needed)
+
+**1. Connect the repo.** In the Cloudflare dashboard go to **Workers & Pages → Create → Import a repository**. Pick `keubanks16/kalshi-bot` and keep the defaults (deploy command `npx wrangler deploy`). Cloudflare redeploys automatically every time the repo changes.
+
+**2. Add secrets.** Open the Worker → **Settings → Variables and Secrets** → add as **Secret**:
+
+| Name | Value |
+|---|---|
+| `DASHBOARD_PASSWORD` | any password; needed to change settings and use the kill switch |
+| `KALSHI_API_KEY_ID` | only for demo/live |
+| `KALSHI_PRIVATE_KEY` | only for demo/live. Paste the whole `.key`/`.pem` file, including the BEGIN/END lines |
+
+**3. Open the dashboard** at `https://kalshi-bot.<your-subdomain>.workers.dev` and add it to your phone's home screen. Sign in at the bottom of the page to unlock the time-limit buttons and kill switch.
+
+The plain settings (mode, limits, strategy knobs) live in `wrangler.jsonc` under `vars`. Edit that file on GitHub and Cloudflare redeploys with the new values.
+
+## Going from paper → demo → live
+
+1. **Paper** for a few weeks. Watch the win rate against the prices paid in each strategy. A crypto model that wins 60% while paying 62¢ is losing money.
+2. **Demo:** make an account and API key at [demo.kalshi.co](https://demo.kalshi.co). Add the key secrets, then set `"BOT_MODE": "demo"` in `wrangler.jsonc`. This proves real orders, fills and signing all work, with fake money.
+3. **Live:** create a key on kalshi.com (different from the demo key) and replace the secrets. Keep the limits small and set:
+   ```jsonc
+   "BOT_MODE": "live",
+   "LIVE_TRADING_CONFIRM": "yes",
+   ```
+
+## Settings worth knowing
+
+All are in `wrangler.jsonc` → `vars`.
+
+- `MIN_EDGE` — the crypto edge needed after fees. Higher means fewer, more confident trades.
+- `MIN_ARB_PROFIT` — the locked-in profit needed per arbitrage set.
+- `CRYPTO_ENABLED` / `ARB_ENABLED` — turn either strategy off.
+- `CRYPTO_ASSETS` — which coins to trade.
+- `KELLY_FRACTION` — 0.25 is conservative; don't go above 0.5.
+- `TRADE_HORIZON` — the starting time limit. The dashboard buttons override it.
 
 ## Project layout
 
 ```
-run_bot.py              start the trading loop
-wsgi.py                 the dashboard (Flask)
-kalshi_bot/
-  config.py             every setting, from .env
-  kalshi_client.py      Kalshi API client + request signing
-  price_feed.py         BTC spot price and volatility
-  model.py              fair probability, fees, sizing (pure math)
-  risk.py               limits checked before every order
-  engine.py             the loop: settle → look → decide → trade
-  store.py              SQLite shared by bot and dashboard
-  dashboard.py          phone-friendly status page
-tests/                  model, signing and paper-trading tests
+src/
+  index.ts        Worker: dashboard routes + once-a-minute cron
+  bot.ts          Durable Object: alarm loop, storage, dashboard data
+  engine.ts       one round: settle → scan → arbitrage → crypto → trade
+  model.ts        probabilities, fees, sizing, arbitrage math (pure, tested)
+  kalshi.ts       Kalshi API client + request signing (WebCrypto)
+  prices.ts       crypto spot prices and volatility
+  store.ts        SQLite tables for trades, decisions, settings
+  dashboard.ts    phone-friendly HTML
+  config.ts       every setting and its default
+test/             model, signing and end-to-end paper-trading tests
 ```
 
-## Run it on PythonAnywhere
-
-You need a paid account (for unrestricted internet and an always-on task).
-
-**1. Get the code.** Open a Bash console:
+## Run locally (optional)
 
 ```bash
-git clone https://github.com/keubanks16/kalshi-bot.git
-cd kalshi-bot
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-nano .env        # set DASHBOARD_PASSWORD and FLASK_SECRET_KEY at least
-```
-
-**2. Try one tick.**
-
-```bash
-python run_bot.py --once
-```
-
-It prints what it sees, e.g. `KXBTC15M-…: hold — best edge +0.012 on yes < 0.040`.
-
-**3. Run the bot all the time.** Tasks tab → *Always-on tasks* → add:
-
-```
-/home/YOURUSERNAME/kalshi-bot/venv/bin/python /home/YOURUSERNAME/kalshi-bot/run_bot.py
-```
-
-and set the working directory to `/home/YOURUSERNAME/kalshi-bot`.
-
-**4. Add the dashboard.** Web tab → *Add a new web app* → Manual configuration → Python 3.11. Then:
-
-- **Virtualenv:** `/home/YOURUSERNAME/kalshi-bot/venv`
-- **WSGI file** — replace its contents with:
-
-  ```python
-  import sys
-  path = "/home/YOURUSERNAME/kalshi-bot"
-  if path not in sys.path:
-      sys.path.insert(0, path)
-  import os
-  os.chdir(path)
-  from wsgi import application
-  ```
-
-- Click **Reload**, open `YOURUSERNAME.pythonanywhere.com` on your phone, and add it to your home screen.
-
-The bot and the dashboard share `bot.db` in the project folder.
-
-## Going from paper → demo → live
-
-1. **Paper** for at least a few hundred trades. Watch the win rate against the prices paid. A model that wins 60% while paying 62¢ is losing money.
-2. **Demo:** make an account and API key at [demo.kalshi.co](https://demo.kalshi.co), save the private key as `kalshi_private_key.pem` in the project folder, then set:
-   ```
-   BOT_MODE=demo
-   KALSHI_API_KEY_ID=your-demo-key-id
-   ```
-   This checks that real orders, fills and signing all work.
-3. **Live:** create a key on kalshi.com (different from demo), keep the limits small, and set:
-   ```
-   BOT_MODE=live
-   LIVE_TRADING_CONFIRM=yes
-   KALSHI_API_KEY_ID=your-live-key-id
-   ```
-
-Restart the always-on task after any `.env` change.
-
-Never commit `.env` or the `.pem` file; `.gitignore` already blocks them.
-
-## Tuning
-
-All settings are in `.env` (see `.env.example`). The ones that matter most:
-
-- `MIN_EDGE` — higher means fewer, more confident trades.
-- `KELLY_FRACTION` — 0.25 is conservative; don't go above 0.5.
-- `MIN_SECONDS_LEFT` / `MIN_SECONDS_ELAPSED` — which part of the 15 minutes it trades.
-
-## Tests
-
-```bash
-pip install -r requirements-dev.txt
-pytest
+npm install
+npm test          # 25 tests, no network needed
+npm run dev       # local Worker at http://localhost:8787
 ```
 
 ## Honest caveats
 
-- The model assumes BTC moves randomly with no drift. Its edge comes from the market mispricing that randomness, not from predicting direction. If Kalshi's prices are already efficient, the bot will mostly sit out — that's working as intended.
-- The exchange median isn't exactly the CF Benchmarks index; in a fast move the two can differ by a few dollars.
-- Paper fills assume you get the displayed ask. Real fills can be worse.
-- Fees are modeled as Kalshi's standard taker fee (`0.07 × contracts × price × (1 − price)`, rounded up). Check Kalshi's current fee schedule and adjust `TAKER_FEE_RATE` if it differs.
+- **Most of the time the bot will do nothing.** Kalshi's prices are usually efficient. It only trades when the numbers clearly disagree, and that is intended.
+- The crypto model assumes prices move randomly with no trend. Real crypto has sudden jumps, especially over days, so longer time limits carry more model risk.
+- The exchange median isn't exactly CF Benchmarks' index. In fast moves they can differ slightly.
+- **Arbitrage legs fill one at a time.** If a later leg fails to fill, the earlier ones are held as normal trades and are no longer risk-free. The per-event limit caps this.
+- Fees use Kalshi's standard taker fee, `0.07 × contracts × price × (1 − price)` rounded up. Events with custom fees are skipped. Check Kalshi's current fee schedule.
+- Paper fills assume you get the displayed ask; real fills can be worse.
 - This is not financial advice. Only trade money you can afford to lose.

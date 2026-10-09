@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kalshi-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+
+  // The trading loop lives in one Durable Object with its own SQLite database.
+  "durable_objects": {
+    "bindings": [{ "name": "BOT", "class_name": "Bot" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Bot"] }],
+
+  // Once a minute, make sure the loop is running (it restarts itself after deploys).
+  "triggers": { "crons": ["* * * * *"] },
+
+  "observability": { "enabled": true },
+
+  // Plain settings. Secrets (API key, private key, dashboard password) go in
+  // the Cloudflare dashboard under Settings -> Variables and Secrets, never here.
+  "vars": {
+    "BOT_MODE": "paper",            // paper | demo | live
+    "LIVE_TRADING_CONFIRM": "",     // must be "yes" for live
+    "TRADE_HORIZON": "day",         // starting time limit: hour | day | week | month | any
+    "BOT_TIMEZONE": "America/New_York",
+    "POLL_SECONDS": "10",
+
+    "CRYPTO_ENABLED": "true",
+    "ARB_ENABLED": "true",
+    "CRYPTO_ASSETS": "BTC,ETH,SOL,XRP,DOGE",
+    "SERIES_PER_TICK": "3",
+
+    "MIN_EDGE": "0.04",
+    "MIN_ARB_PROFIT": "0.02",
+    "KELLY_FRACTION": "0.25",
+    "MIN_SECONDS_LEFT": "120",
+    "MIN_SECONDS_ELAPSED": "60",
+
+    "BANKROLL": "100",
+    "MAX_CONTRACTS_PER_ORDER": "10",
+    "MAX_COST_PER_MARKET": "10",
+    "MAX_COST_PER_EVENT": "20",
+    "MAX_OPEN_RISK": "50",
+    "MAX_DAILY_LOSS": "25",
+    "MAX_ORDERS_PER_MARKET": "3"
+  }
+}

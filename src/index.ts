@@ -1,0 +1,81 @@
+// Worker entry: serves the dashboard and keeps the trading loop alive.
+
+import type { Env } from "./config.ts";
+import { renderDashboard } from "./dashboard.ts";
+import type { Bot } from "./bot.ts";
+
+export { Bot } from "./bot.ts";
+
+const COOKIE = "kb_session";
+
+function bot(env: Env): DurableObjectStub<Bot> {
+  const ns = env.BOT as DurableObjectNamespace<Bot>;
+  return ns.get(ns.idFromName("main"));
+}
+
+async function sessionToken(password: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("kalshi-bot-dashboard"));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function isAuthed(req: Request, env: Env): Promise<boolean> {
+  const pw = env.DASHBOARD_PASSWORD;
+  if (!pw) return false;
+  const cookie = req.headers.get("Cookie") ?? "";
+  const m = cookie.match(new RegExp(`${COOKIE}=([a-f0-9]+)`));
+  return !!m && timingSafeEqual(m[1], await sessionToken(pw));
+}
+
+const home = (extraHeaders: Record<string, string> = {}) => new Response(null, { status: 303, headers: { Location: "/", ...extraHeaders } });
+
+export default {
+  async fetch(req, env, ctx): Promise<Response> {
+    const url = new URL(req.url);
+    const stub = bot(env);
+    ctx.waitUntil(stub.start());
+
+    if (req.method === "GET" && url.pathname === "/") {
+      const snap = await stub.snapshot();
+      const html = renderDashboard(snap, { authed: await isAuthed(req, env), passwordSet: !!env.DASHBOARD_PASSWORD });
+      return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+    }
+
+    if (req.method === "GET" && url.pathname === "/health") {
+      const s = await stub.snapshot();
+      return Response.json({ alive: s.alive, mode: s.mode, status: s.status, killSwitch: s.killSwitch, horizon: s.horizon, problem: s.problem });
+    }
+
+    if (req.method === "POST" && url.pathname === "/login") {
+      const pw = env.DASHBOARD_PASSWORD;
+      const form = await req.formData();
+      if (pw && timingSafeEqual(String(form.get("password") ?? ""), pw)) {
+        const token = await sessionToken(pw);
+        return home({ "Set-Cookie": `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000` });
+      }
+      return home();
+    }
+
+    if (req.method === "POST" && (url.pathname === "/kill" || url.pathname === "/horizon")) {
+      if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+      const form = await req.formData();
+      if (url.pathname === "/kill") await stub.setKillSwitch(form.get("on") === "on");
+      else await stub.setHorizon(String(form.get("horizon") ?? ""));
+      return home();
+    }
+
+    return new Response("Not found", { status: 404 });
+  },
+
+  // Runs every minute (see wrangler.jsonc) just to make sure the loop is alive.
+  async scheduled(_controller, env, ctx): Promise<void> {
+    ctx.waitUntil(bot(env).start());
+  },
+} satisfies ExportedHandler<Env>;
