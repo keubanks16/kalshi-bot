@@ -66,6 +66,8 @@ export class Bot extends DurableObject<Env> {
   settings: Settings;
   problem: string | null;
   engine: Engine | null = null;
+  /** Why the engine couldn't start (e.g. a bad API key), shown on the dashboard. */
+  startError: string | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -111,7 +113,14 @@ export class Bot extends DurableObject<Env> {
     this.ticking = true;
     this.tickStarted = Date.now();
     try {
-      const engine = await this.getEngine();
+      let engine: Engine;
+      try {
+        engine = await this.getEngine();
+        this.startError = null;
+      } catch (e) {
+        this.startError = `${new Date().toISOString().slice(11, 19)} UTC — couldn't start: ${(e as Error).message}`;
+        return;
+      }
       try {
         await engine.tick();
       } catch (e) {
@@ -164,8 +173,8 @@ export class Bot extends DurableObject<Env> {
       canGoLive: this.settings.mode !== "demo",
       keysSet: this.keysSet(),
       problem: this.problem,
-      status: this.problem ? "Not running — fix the setting below" : e?.status ?? "Starting up…",
-      lastError: e?.lastError ?? null,
+      status: this.problem ? "Not running — fix the setting below" : e?.status ?? (this.startError ? "Not running — can't start (see error)" : "Starting up…"),
+      lastError: e?.lastError ?? this.startError,
       alive: !!e && now - e.heartbeat < Math.max(60, this.settings.pollSeconds * 6),
       killSwitch: this.store.killSwitchOn(),
       horizon,
