@@ -9,7 +9,17 @@ const money = (x: number) => `${x >= 0 ? "+" : "−"}$${Math.abs(x).toFixed(2)}`
 const cls = (x: number | null) => (x === null ? "" : x >= 0 ? "up" : "down");
 const STRATEGY: Record<string, string> = { crypto: "Crypto", arb: "Arbitrage" };
 
-export function renderDashboard(s: Snapshot, opts: { authed: boolean; passwordSet: boolean }): string {
+export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwordSet: boolean }): string {
+  // During a deploy the page can update before the bot does, so tolerate
+  // fields an older bot doesn't send yet instead of crashing.
+  const s: Snapshot = {
+    ...snap,
+    horizons: (snap.horizons ?? []).map((h) => ({ ...h, short: h.short ?? h.label })),
+    limits: snap.limits ?? [],
+    trades: snap.trades ?? [],
+    decisions: snap.decisions ?? [],
+    byStrategy: snap.byStrategy ?? [],
+  };
   const time = (t: number) => new Date(t * 1000).toLocaleTimeString("en-US", { timeZone: s.timezone, hour: "numeric", minute: "2-digit" });
   const date = (t: number) => new Date(t * 1000).toLocaleDateString("en-US", { timeZone: s.timezone, month: "short", day: "numeric" });
   // "today 5:30 AM", "tomorrow 5 PM" style closing times; full date further out.
@@ -117,7 +127,7 @@ ${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</
 
 <div class="card"><div class="k">Only trade markets that close</div>${horizonPicker}</div>
 
-<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>
+${s.limits.length ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
 
 <div class="grid">
  <div class="card"><div class="k">Total P&amp;L</div><div class="v ${cls(sum.pnl)}">${esc(money(sum.pnl))}</div></div>

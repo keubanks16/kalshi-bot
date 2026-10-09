@@ -182,6 +182,19 @@ test("backs off when Kalshi says too many requests", async () => {
   assert.match(engine.status, /slow down/);
 });
 
+test("dashboard survives an older bot without limits or short labels", () => {
+  const html = renderDashboard(
+    {
+      mode: "paper", problem: null, status: "ok", lastError: null, alive: true, killSwitch: false, horizon: "day",
+      horizons: [{ key: "day", label: "Within a day" }] as any, limits: undefined as any,
+      summary: { trades: 0, settled: 0, wins: 0, pnl: 0, fees: 0, openCost: 0 }, today: 0,
+      byStrategy: [], trades: [], decisions: [], timezone: "America/New_York", diag: {},
+    },
+    { authed: true, passwordSet: true },
+  );
+  assert.ok(html.includes("Kalshi Bot"));
+});
+
 test("15-minute limit skips markets closing later", async () => {
   const { engine, store } = setup();
   store.set("horizon", "15m");
