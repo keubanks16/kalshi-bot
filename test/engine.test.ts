@@ -949,3 +949,16 @@ test("a crypto series with a resting bid is re-checked every round, so a stale b
   await engine.tick();
   assert.equal(store.restingOrders().length, 0, "pulled on the very next round");
 });
+
+test("every cancelled bid is logged with its reason", async () => {
+  const a = makerSetup();
+  await a.again();
+  await a.again(121); // expires unfilled
+  assert.match(a.store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /cancelled bid for \d+ YES @ \$0\.54: not filled after 2 min/);
+
+  const b = makerSetup();
+  await b.again();
+  (b.engine.feed as any).spot = async () => 79900;
+  await b.again(10);
+  assert.match(b.store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /cancelled bid for \d+ YES @ \$0\.54: edge at this price is now -/);
+});

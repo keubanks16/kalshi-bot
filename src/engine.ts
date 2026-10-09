@@ -217,7 +217,7 @@ export class Engine {
     if (this.store.killSwitchOn()) {
       if (this.store.restingOrders().length) {
         this.phase = "cancelling resting orders";
-        for (const o of this.store.restingOrders()) await this.cancelResting(o, now);
+        for (const o of this.store.restingOrders()) await this.cancelResting(o, now, "kill switch is on");
       }
       this.status = "Paused — kill switch is on";
       return;
@@ -434,7 +434,7 @@ export class Engine {
         const resting = this.store.restingOrders(this.modeFor("crypto")).find((o) => o.ticker === m.ticker);
         if (resting) {
           const left = (resting.side === "yes" ? p : 1 - p) - resting.price - takerFee(100, resting.price, this.s.makerFeeRate) / 100;
-          if (left < requiredEdge(resting.price, limits)) await this.cancelResting(resting, now);
+          if (left < requiredEdge(resting.price, limits)) await this.cancelResting(resting, now, `edge at this price is now ${fmtEdge(left)}`);
           continue;
         }
 
@@ -1056,12 +1056,32 @@ export class Engine {
         }
         if (r.status !== "resting") continue;
       }
-      if (now >= r.expires_ts || (r.close_ts !== null && now >= r.close_ts - this.s.minSecondsLeft)) await this.cancelResting(r, now);
+      if (now >= r.expires_ts || (r.close_ts !== null && now >= r.close_ts - this.s.minSecondsLeft))
+        await this.cancelResting(r, now, r.close_ts !== null && now >= r.close_ts - this.s.minSecondsLeft ? "market closing soon" : `not filled after ${Math.round((now - r.ts) / 60)} min`);
     }
   }
 
   /** Cancel a resting order, booking whatever filled before the cancel landed. */
-  async cancelResting(r: OrderRow, now: number): Promise<void> {
+  /** Cancel a resting order and say why in the log, so a bid never just quietly disappears. */
+  async cancelResting(r: OrderRow, now: number, why = "cancelled"): Promise<void> {
+    const before = r.filled;
+    await this.cancelRestingQuietly(r, now);
+    if (r.status === "resting") return; // couldn't cancel yet; Kalshi's own expiry will
+    const left = r.count - r.filled;
+    if (left <= 0) return; // it filled after all (the fill is logged separately)
+    const part = r.filled > before || r.filled > 0 ? ` (${r.filled} of ${r.count} had filled)` : "";
+    this.store.addDecision({
+      ts: now,
+      strategy: r.strategy,
+      ticker: r.ticker,
+      action: "cancel",
+      reason: `cancelled bid for ${left} ${r.side.toUpperCase()} @ $${r.price.toFixed(2)}: ${why}${part}`,
+      p_fair: r.p_fair,
+      price: r.price,
+    });
+  }
+
+  private async cancelRestingQuietly(r: OrderRow, now: number): Promise<void> {
     if (r.mode !== "paper") {
       try {
         const final = (await this.client.cancelOrder(r.order_id!, r.ticker)) ?? (await this.client.getOrder(r.order_id!));
