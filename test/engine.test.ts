@@ -645,3 +645,19 @@ test("dashboard shows separate live and paper limit forms", () => {
   assert.ok(html.includes("Save live limits") && html.includes("Save paper limits"));
   assert.ok(html.includes("Live (real money)") && html.includes("Paper (practice)"));
 });
+
+test("dashboard doesn't force-reload over unsaved form edits", () => {
+  const html = renderDashboard(
+    {
+      mode: "paper", problem: null, status: "ok", lastError: null, alive: true, killSwitch: false, horizon: "day",
+      horizons: [{ key: "day", label: "Within a day" }] as any, limits: [],
+      summary: { trades: 0, settled: 0, wins: 0, pnl: 0, fees: 0, openCost: 0 }, today: 0,
+      byStrategy: [], trades: [], decisions: [], timezone: "America/New_York", diag: {},
+    } as any,
+    { authed: true, passwordSet: true },
+  );
+  // the only hard refresh is the no-JavaScript fallback
+  assert.ok(html.includes('<noscript><meta http-equiv="refresh" content="20"></noscript>'));
+  assert.equal(html.split('http-equiv="refresh"').length, 2);
+  assert.ok(html.includes("editing()") && html.includes("location.reload()"));
+});

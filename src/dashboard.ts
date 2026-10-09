@@ -239,7 +239,7 @@ ${s.limits.length ? `<div class="k" style="margin-top:22px">Shared</div>${limitF
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="20">
+<noscript><meta http-equiv="refresh" content="20"></noscript>
 <title>Kalshi Bot</title>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#14171c;--mute:#6b7280;--line:#e5e7eb;--up:#0f8a4f;--down:#c2261d;--accent:#2f5bea;--warn:#b45309}
@@ -342,5 +342,26 @@ ${
     ? `<h2>Sign in to make changes</h2><form method="post" action="/login"><input type="password" name="password" placeholder="Dashboard password" autocomplete="current-password"><button class="go">Sign in</button></form>`
     : ""
 }
-</main></body></html>`;
+</main>
+<script>
+// Refresh every 20s to stay current, but never while you're typing in a form:
+// a reload would throw away numbers you haven't saved yet.
+(function () {
+  var dirty = false, last = Date.now();
+  document.addEventListener("input", function (e) { if (e.target && e.target.form) dirty = true; });
+  document.addEventListener("submit", function () { dirty = false; });
+  function editing() {
+    var a = document.activeElement;
+    return dirty || (a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName));
+  }
+  setInterval(function () {
+    if (document.hidden || editing() || Date.now() - last < 20000) return;
+    location.reload();
+  }, 2000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && !editing() && Date.now() - last >= 20000) location.reload();
+  });
+})();
+</script>
+</body></html>`;
 }
