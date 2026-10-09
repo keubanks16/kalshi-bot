@@ -13,7 +13,7 @@ const KRAKEN_PAIRS: Record<string, string> = { BTC: "XBTUSD", ETH: "ETHUSD", SOL
 type Fetch = typeof fetch;
 
 async function getJson(f: Fetch, url: string): Promise<any> {
-  const r = await f(url, { headers: HEADERS });
+  const r = await f(url, { headers: HEADERS, signal: AbortSignal.timeout(4000) });
   if (!r.ok) throw new Error(`${new URL(url).host} -> ${r.status}`);
   return r.json();
 }

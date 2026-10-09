@@ -42,7 +42,9 @@ export class Bot extends DurableObject<Env> {
   private async getEngine(): Promise<Engine> {
     if (this.engine) return this.engine;
     const s = this.settings;
-    const key = placesOrders(s) ? await importPrivateKey(String(this.env.KALSHI_PRIVATE_KEY)) : null;
+    // Sign requests whenever a key is set, even in paper mode: Kalshi rate-limits
+    // signed requests per account instead of per (shared) Cloudflare IP.
+    const key = this.env.KALSHI_PRIVATE_KEY && this.env.KALSHI_API_KEY_ID ? await importPrivateKey(String(this.env.KALSHI_PRIVATE_KEY)) : null;
     const client = new KalshiClient(baseUrl(this.env, s), String(this.env.KALSHI_API_KEY_ID ?? ""), key);
     this.engine = new Engine(s, client, new PriceFeed(), this.store);
     this.store.set("mode", s.mode);
@@ -51,23 +53,32 @@ export class Bot extends DurableObject<Env> {
 
   /** Make sure the alarm loop is running. Safe to call any number of times. */
   async start(): Promise<void> {
+    if (this.ticking) return; // an alarm is mid-run and will schedule the next one
     if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + 1000);
   }
 
+  private ticking = false;
+  private tickStarted = 0;
+
   async alarm(): Promise<void> {
+    // Schedule the next round first, so a slow round can never stop the loop.
+    const wait = this.problem ? 60 : this.settings.pollSeconds; // misconfigured: check back slowly
+    await this.ctx.storage.setAlarm(Date.now() + wait * 1000);
+    if (this.problem) return;
+
+    // Never run two rounds at once (unless one is clearly stuck).
+    if (this.ticking && Date.now() - this.tickStarted < 90_000) return;
+    this.ticking = true;
+    this.tickStarted = Date.now();
     try {
-      if (!this.problem) {
-        const engine = await this.getEngine();
-        try {
-          await engine.tick();
-        } catch (e) {
-          engine.lastError = `${new Date().toISOString().slice(11, 19)} UTC — ${(e as Error).message}`;
-        }
+      const engine = await this.getEngine();
+      try {
+        await engine.tick();
+      } catch (e) {
+        engine.lastError = `${new Date().toISOString().slice(11, 19)} UTC — ${(e as Error).message}`;
       }
     } finally {
-      // While misconfigured, check back slowly; a redeploy restarts the object anyway.
-      const wait = this.problem ? 60 : this.settings.pollSeconds;
-      await this.ctx.storage.setAlarm(Date.now() + wait * 1000);
+      this.ticking = false;
     }
   }
 

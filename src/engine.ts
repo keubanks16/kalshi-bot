@@ -96,6 +96,26 @@ export class Engine {
     this.eventLookups = 0;
     this.bankrollCache = this.bankrollCache && now - this.bankrollCache.at < 60 ? this.bankrollCache : null;
 
+    if (now < this.cooldownUntil) {
+      this.status = `Kalshi asked the bot to slow down — resuming in ${Math.ceil(this.cooldownUntil - now)}s.`;
+      return;
+    }
+    try {
+      await this.round(now);
+      this.rateLimitStrikes = 0;
+    } catch (e) {
+      if (!(e instanceof KalshiError && e.status === 429)) throw e;
+      // Back off 15s, 30s, 60s… up to 5 minutes, instead of hammering Kalshi.
+      const wait = Math.min(300, 15 * 2 ** this.rateLimitStrikes++);
+      this.cooldownUntil = now + wait;
+      this.status = `Kalshi asked the bot to slow down — resuming in ${wait}s.`;
+    }
+  }
+
+  cooldownUntil = 0;
+  rateLimitStrikes = 0;
+
+  private async round(now: number): Promise<void> {
     if (now - this.lastSettle >= 60) {
       await this.settle();
       this.lastSettle = now;

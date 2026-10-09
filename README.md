@@ -70,8 +70,10 @@ A shorter limit means your money comes back sooner. Changing the limit applies o
 | Name | Value |
 |---|---|
 | `DASHBOARD_PASSWORD` | any password; needed to change settings and use the kill switch |
-| `KALSHI_API_KEY_ID` | only for demo/live |
-| `KALSHI_PRIVATE_KEY` | only for demo/live. Paste the whole `.key`/`.pem` file, including the BEGIN/END lines |
+| `KALSHI_API_KEY_ID` | needed for demo/live; **recommended even for paper** |
+| `KALSHI_PRIVATE_KEY` | same. Paste the whole `.key`/`.pem` file, including the BEGIN/END lines |
+
+Why add a key in paper mode: without one, Kalshi limits requests by IP address, and Cloudflare's IPs are shared with lots of other apps, so the bot can get "too many requests." With a key, the limit is your own account's. Paper mode never places orders, even with a key set. When rate-limited, the bot backs off automatically (15 seconds, then longer) and the dashboard says so.
 
 **3. Open the dashboard** at `https://kalshi-bot.<your-subdomain>.workers.dev` and add it to your phone's home screen. Sign in at the bottom of the page to unlock the time-limit buttons and kill switch.
 

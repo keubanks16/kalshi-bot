@@ -7,6 +7,7 @@ import { loadSettings } from "../src/config.ts";
 import { Engine } from "../src/engine.ts";
 import { Store, type Sql } from "../src/store.ts";
 import { renderDashboard } from "../src/dashboard.ts";
+import { KalshiError } from "../src/kalshi.ts";
 
 const NOW = Date.parse("2026-10-09T14:00:00Z") / 1000;
 const iso = (t: number) => new Date(t * 1000).toISOString();
@@ -165,6 +166,20 @@ test("crypto win and loss settle correctly", async () => {
   client.all[0].result = "no";
   await engine.settle();
   assert.equal(store.recentTrades()[0].pnl, -t.cost);
+});
+
+test("backs off when Kalshi says too many requests", async () => {
+  const { engine, client } = setup();
+  let calls = 0;
+  client.getMarketsPage = async () => {
+    calls++;
+    throw new KalshiError(429, '{"error":{"code":"too_many_requests"}}');
+  };
+  await engine.tick(); // hits the limit
+  assert.ok(engine.cooldownUntil > NOW);
+  await engine.tick(); // still cooling down: no new request
+  assert.equal(calls, 1);
+  assert.match(engine.status, /slow down/);
 });
 
 test("kill switch stops trading", async () => {

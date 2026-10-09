@@ -133,6 +133,7 @@ export class KalshiClient {
   key: SigningKey | null;
   fetchFn: typeof fetch;
   requests = 0; // subrequests made, for staying under Workers limits
+  timeoutMs = 8000; // never let one request hang a round
   private basePath: string;
 
   constructor(baseUrl: string, apiKeyId = "", key: SigningKey | null = null, fetchFn: typeof fetch = (...a) => fetch(...a)) {
@@ -165,6 +166,7 @@ export class KalshiClient {
         method,
         headers: await this.headers(method, path),
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
       const text = await resp.text();
       if (resp.ok) return (text ? JSON.parse(text) : {}) as T;
