@@ -58,6 +58,30 @@ const SCHEMA = [
     action TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS ai_ticker ON ai_forecasts(ticker)`,
+  // Resting maker orders. Until they finish, their unfilled part counts against
+  // every risk limit as if it had already filled.
+  `CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    day TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    event_ticker TEXT NOT NULL,
+    side TEXT NOT NULL,
+    price REAL NOT NULL,
+    count INTEGER NOT NULL,
+    filled INTEGER NOT NULL DEFAULT 0,
+    fee_paid REAL NOT NULL DEFAULT 0,
+    order_id TEXT,
+    p_fair REAL,
+    edge REAL,
+    note TEXT,
+    close_ts REAL,
+    expires_ts REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'resting'
+  )`,
+  `CREATE INDEX IF NOT EXISTS orders_status ON orders(status)`,
   `CREATE INDEX IF NOT EXISTS ai_day ON ai_forecasts(day)`,
 ];
 
@@ -84,6 +108,31 @@ export interface TradeRow {
 }
 
 export type NewTrade = Omit<TradeRow, "id" | "result" | "pnl">;
+
+export interface OrderRow {
+  id: number;
+  ts: number;
+  day: string;
+  mode: string;
+  strategy: string;
+  ticker: string;
+  event_ticker: string;
+  side: "yes" | "no";
+  price: number;
+  count: number;
+  filled: number;
+  fee_paid: number;
+  order_id: string | null;
+  p_fair: number | null;
+  edge: number | null;
+  note: string | null;
+  close_ts: number | null;
+  expires_ts: number;
+  status: string;
+}
+
+// Dollars still reserved by resting orders (unfilled part only), used in every limit below.
+const PENDING = "(count - filled) * price";
 
 export class Store {
   sql: Sql;
@@ -123,18 +172,52 @@ export class Store {
   }
   // Everything below is per trading mode, so paper results never mix with
   // real ones and paper positions never use up live risk limits.
+  /** Sides held or resting on a market (a resting order counts, so we never stack or oppose it). */
   openSides(ticker: string, mode: string): string[] {
-    return this.rows<{ side: string }>("SELECT DISTINCT side FROM trades WHERE ticker = ? AND mode = ? AND result IS NULL", ticker, mode).map((r) => r.side);
+    return this.rows<{ side: string }>(
+      "SELECT side FROM trades WHERE ticker = ? AND mode = ? AND result IS NULL UNION SELECT side FROM orders WHERE ticker = ? AND mode = ? AND status = 'resting'",
+      ticker, mode, ticker, mode,
+    ).map((r) => r.side);
   }
+  /** Spend on a market, and how many orders it has had. A maker order counts once however many fills it gets. */
   marketExposure(ticker: string, mode: string): { cost: number; orders: number } {
-    const r = this.one<{ cost: number; n: number }>("SELECT COALESCE(SUM(cost), 0) AS cost, COUNT(*) AS n FROM trades WHERE ticker = ? AND mode = ?", ticker, mode);
-    return { cost: Number(r.cost), orders: Number(r.n) };
+    const t = this.one<{ cost: number; n: number }>("SELECT COALESCE(SUM(cost), 0) AS cost, COUNT(*) AS n FROM trades WHERE ticker = ? AND mode = ? AND order_id IS NULL", ticker, mode);
+    const tm = this.one<{ cost: number }>("SELECT COALESCE(SUM(cost), 0) AS cost FROM trades WHERE ticker = ? AND mode = ? AND order_id IS NOT NULL", ticker, mode);
+    // Live trades and every maker order (paper ones get a made-up id) carry an order_id; count each once.
+    const ids = this.one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM (SELECT order_id FROM trades WHERE ticker = ? AND mode = ? AND order_id IS NOT NULL UNION SELECT order_id FROM orders WHERE ticker = ? AND mode = ? AND order_id IS NOT NULL)",
+      ticker, mode, ticker, mode,
+    );
+    const pend = this.one<{ c: number }>(`SELECT COALESCE(SUM(${PENDING}), 0) AS c FROM orders WHERE ticker = ? AND mode = ? AND status = 'resting'`, ticker, mode);
+    return { cost: Number(t.cost) + Number(tm.cost) + Number(pend.c), orders: Number(t.n) + Number(ids.n) };
   }
   eventExposure(eventTicker: string, mode: string): number {
-    return Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE event_ticker = ? AND mode = ? AND result IS NULL", eventTicker, mode).c);
+    const t = Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE event_ticker = ? AND mode = ? AND result IS NULL", eventTicker, mode).c);
+    return t + Number(this.one<{ c: number }>(`SELECT COALESCE(SUM(${PENDING}), 0) AS c FROM orders WHERE event_ticker = ? AND mode = ? AND status = 'resting'`, eventTicker, mode).c);
   }
   openRisk(mode: string): number {
-    return Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE mode = ? AND result IS NULL", mode).c);
+    const t = Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE mode = ? AND result IS NULL", mode).c);
+    return t + this.pendingCost(mode);
+  }
+  pendingCost(mode: string, day?: string): number {
+    return day === undefined
+      ? Number(this.one<{ c: number }>(`SELECT COALESCE(SUM(${PENDING}), 0) AS c FROM orders WHERE mode = ? AND status = 'resting'`, mode).c)
+      : Number(this.one<{ c: number }>(`SELECT COALESCE(SUM(${PENDING}), 0) AS c FROM orders WHERE mode = ? AND day = ? AND status = 'resting'`, mode, day).c);
+  }
+
+  // resting maker orders
+  addOrder(o: Omit<OrderRow, "id" | "status">): number {
+    const cols = Object.keys(o);
+    this.sql.exec(`INSERT INTO orders (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, ...cols.map((c) => (o as any)[c] ?? null));
+    return Number(this.one<{ id: number }>("SELECT MAX(id) AS id FROM orders").id);
+  }
+  restingOrders(mode?: string): OrderRow[] {
+    return mode === undefined
+      ? this.rows<OrderRow>("SELECT * FROM orders WHERE status = 'resting' ORDER BY ts")
+      : this.rows<OrderRow>("SELECT * FROM orders WHERE status = 'resting' AND mode = ? ORDER BY ts", mode);
+  }
+  updateOrder(id: number, filled: number, feePaid: number, status: string): void {
+    this.sql.exec("UPDATE orders SET filled = ?, fee_paid = ?, status = ? WHERE id = ?", filled, feePaid, status, id);
   }
   /** Losses realized today plus everything still at risk from today's trades (worst case). */
   dayLoss(day: string, mode: string): number {
@@ -145,7 +228,7 @@ export class Store {
       day,
       mode,
     );
-    return Math.max(0, -Number(r.realized)) + Number(r.at_risk);
+    return Math.max(0, -Number(r.realized)) + Number(r.at_risk) + this.pendingCost(mode, day);
   }
   summary(mode: string, since = 0): { trades: number; settled: number; wins: number; pnl: number; fees: number; openCost: number } {
     const r = this.one(

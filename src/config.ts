@@ -59,6 +59,10 @@ export interface Settings {
   maxVol: number;
   kellyFraction: number;
   takerFeeRate: number;
+  makerFeeRate: number; // Kalshi's maker fee on markets that charge one (many charge none)
+  makerStrategies: string[]; // strategies that rest post-only orders at the bid instead of taking the ask
+  makerTtlSeconds: number; // crypto: cancel a resting order after this long
+  makerSlowTtlSeconds: number; // sports and AI: slower markets, so orders rest longer
   modelWeight: number; // 0..1, how much to trust our own estimates vs the market price
 
   // Sports: Kalshi game prices vs sportsbook consensus
@@ -136,6 +140,13 @@ export function loadSettings(env: Env): Settings {
     maxVol: num(env, "MAX_VOL", 2.5),
     kellyFraction: num(env, "KELLY_FRACTION", 0.25),
     takerFeeRate: num(env, "TAKER_FEE_RATE", 0.07),
+    makerFeeRate: num(env, "MAKER_FEE_RATE", 0.0175),
+    makerStrategies: str(env, "MAKER_STRATEGIES", "crypto,sports,ai")
+      .split(",")
+      .map((x) => x.trim().toLowerCase())
+      .filter((x) => x && x !== "arb" && x !== "none"),
+    makerTtlSeconds: num(env, "MAKER_TTL_SECONDS", 120),
+    makerSlowTtlSeconds: num(env, "MAKER_SLOW_TTL_SECONDS", 1800),
     modelWeight: num(env, "MODEL_WEIGHT", 0.5),
 
     sportsEnabled: bool(env, "SPORTS_ENABLED", true),

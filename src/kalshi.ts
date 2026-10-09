@@ -122,7 +122,14 @@ export interface Order {
   fill_count?: number;
   fill_count_fp?: string;
   taker_fees_dollars?: string;
+  maker_fees_dollars?: string;
+  status?: string; // resting, canceled, executed
   [k: string]: unknown;
+}
+
+/** Contracts filled so far on an order. */
+export function orderFilled(o: Order): number {
+  return Math.floor(Number(o.fill_count_fp ?? o.fill_count ?? 0)) || 0;
 }
 
 type Params = Record<string, string | number | undefined>;
@@ -245,6 +252,59 @@ export class KalshiClient {
     };
     return (await this.request<{ order: Order }>("POST", "/portfolio/orders", undefined, body)).order ?? {};
   }
+
+  /**
+   * Post a resting buy at `price` that can only add liquidity (post-only, so it
+   * never pays the taker fee). Kalshi itself cancels it at `expiresAt` (unix
+   * seconds), even if the bot stops running.
+   */
+  async createMakerOrder(ticker: string, side: "yes" | "no", count: number, price: number, expiresAt: number): Promise<Order> {
+    const body = {
+      ticker,
+      side,
+      action: "buy",
+      count: Math.floor(count),
+      type: "limit",
+      [`${side}_price_dollars`]: price.toFixed(4),
+      time_in_force: "good_till_canceled",
+      post_only: true,
+      expiration_ts: Math.floor(expiresAt),
+      cancel_order_on_pause: true,
+      client_order_id: crypto.randomUUID(),
+    };
+    return (await this.request<{ order: Order }>("POST", "/portfolio/orders", undefined, body)).order ?? {};
+  }
+
+  async getOrder(orderId: string): Promise<Order> {
+    return (await this.request<{ order: Order }>("GET", `/portfolio/orders/${orderId}`)).order ?? {};
+  }
+
+  /** Cancel a resting order. Returns the order as it ended (with its final fill count) when Kalshi sends it. */
+  async cancelOrder(orderId: string): Promise<Order | null> {
+    const d = await this.request<{ order?: Order }>("DELETE", `/portfolio/orders/${orderId}`);
+    return d.order ?? null;
+  }
+}
+
+/** Best price to rest a buy at: 1¢ above the best bid when the spread allows, never at or through the ask. */
+export function makerPrice(bid: number | null, ask: number | null): number | null {
+  // Work in whole cents so float noise never nudges a price across the ask.
+  const b = bid === null ? null : Math.round(bid * 100);
+  const a = ask === null ? null : Math.round(ask * 100);
+  if (a === null && b === null) return null;
+  let c = b === null ? a! - 1 : b + 1;
+  if (a !== null && c > a - 1) c = b !== null && b < a ? Math.min(b, a - 1) : a - 1;
+  return c >= 1 && c <= 99 ? c / 100 : null;
+}
+
+/** Where we would rest a YES and a NO buy. A NO bid is the other side of a YES ask. */
+export function makerQuotes(m: Record<string, unknown>): { yes: number | null; no: number | null } {
+  const r = (x: number | null) => (x === null ? null : Math.round(x * 100) / 100);
+  const yb = dollars(m, "yes_bid");
+  const ya = dollars(m, "yes_ask");
+  const nb = dollars(m, "no_bid") ?? (ya === null ? null : r(1 - ya));
+  const na = dollars(m, "no_ask") ?? (yb === null ? null : r(1 - yb));
+  return { yes: makerPrice(yb, ya), no: makerPrice(nb, na) };
 }
 
 /** Read a price from a market object, preferring the `_dollars` field. */

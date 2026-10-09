@@ -36,6 +36,9 @@
     "MIN_ARB_PROFIT": "0.02",
     "KELLY_FRACTION": "0.25",
     "MODEL_WEIGHT": "0.5",          // blend: 1 = trust the crypto model fully, 0.5 = halfway to the market price
+    "MAKER_STRATEGIES": "crypto,sports,ai", // rest post-only bids instead of paying the taker fee; "none" = always take the ask
+    "MAKER_TTL_SECONDS": "120",     // crypto: cancel an unfilled bid after 2 minutes
+    "MAKER_SLOW_TTL_SECONDS": "1800", // sports and AI: 30 minutes (sports bids always cancel before the game)
     "MIN_SECONDS_LEFT": "120",
 
     // Sports: Kalshi game prices vs sportsbook odds (needs the ODDS_API_KEY secret from the-odds-api.com)

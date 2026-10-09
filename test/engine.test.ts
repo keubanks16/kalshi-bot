@@ -117,7 +117,7 @@ class FakeFeed {
 }
 
 function setup(vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAKER_STRATEGIES: "none", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ...vars });
   const store = new Store(memorySql());
   const client = new FakeClient();
   const engine = new Engine(s, client as any, new FakeFeed() as any, store, () => NOW);
@@ -388,4 +388,161 @@ test("dashboard renders and escapes Kalshi text", async () => {
   assert.match(html, /pays \$\d+\.00 if right/);
   assert.ok(html.includes('action="/model"') && html.includes(">50%<"));
   assert.match(html, /closes (today|tomorrow|[A-Z][a-z]{2} \d+) \d{1,2}:\d{2}/);
+});
+
+// ------------------------------------------------------------ maker orders
+function makerSetup(vars: Record<string, string> = {}) {
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", ...vars });
+  const store = new Store(memorySql());
+  const client = new FakeClient();
+  const clock = { now: NOW };
+  const engine = new Engine(s, client as any, new FakeFeed() as any, store, () => clock.now);
+  const again = async (dt = 0) => {
+    clock.now += dt;
+    engine.series.forEach((st) => (st.nextCheck = 0));
+    await engine.tick();
+  };
+  return { engine, store, client, clock, again };
+}
+const BTC = "KXBTCD-26OCT0911-T80000";
+
+test("maker: rests a bid 1¢ above the best bid instead of taking the ask, and reserves its cost", async () => {
+  const { engine, store } = makerSetup();
+  await engine.tick();
+  assert.equal(store.openTrades().length, 0, "nothing bought at the ask");
+  const [o] = store.restingOrders("paper");
+  assert.equal(o.ticker, BTC);
+  assert.equal(o.side, "yes");
+  assert.equal(o.price, 0.54); // bid 53¢, ask 55¢
+  assert.ok(o.expires_ts <= NOW + 120);
+  assert.ok(Math.abs(store.openRisk("paper") - o.count * 0.54) < 1e-9, "unfilled order counts against limits");
+  assert.equal(store.marketExposure(BTC, "paper").orders, 1);
+});
+
+test("maker (paper): fills only when the market trades down to our price, at our price and the maker fee", async () => {
+  const { store, client, again } = makerSetup();
+  await again();
+  const [o] = store.restingOrders("paper");
+  await again(5);
+  assert.equal(store.openTrades().length, 0, "ask still above our bid: no fill");
+  client.all[0].yes_ask_dollars = "0.5400";
+  await again(5);
+  const [t] = store.openTrades();
+  assert.equal(t.price, 0.54);
+  assert.equal(t.contracts, o.count);
+  assert.ok(t.fee < 0.07 * o.count * 0.54 * 0.46, "maker fee, well under the taker fee");
+  assert.equal(store.restingOrders().length, 0);
+  assert.equal(store.marketExposure(BTC, "paper").orders, 1, "the order and its fill count once");
+});
+
+test("maker: an unfilled bid is cancelled after its time and frees the limits", async () => {
+  const { store, again } = makerSetup();
+  await again();
+  assert.equal(store.restingOrders().length, 1);
+  await again(121);
+  // the old one expired; the bot may have posted a fresh one, but never two at once
+  assert.ok(store.restingOrders().length <= 1);
+  assert.equal(store.openTrades().length, 0);
+  const all = (store as any).rows("SELECT status FROM orders");
+  assert.equal(all[0].status, "canceled");
+});
+
+test("maker: crypto pulls a resting bid as soon as the edge at its price is gone", async () => {
+  const { engine, store, again } = makerSetup();
+  await again();
+  assert.equal(store.restingOrders().length, 1);
+  (engine.feed as any).spot = async () => 79900; // BTC drops below the strike
+  await again(10);
+  assert.equal(store.restingOrders().length, 0);
+  assert.equal(store.openTrades().length, 0);
+});
+
+test("maker: never rests a bid into the market's last minutes", async () => {
+  const { store, client, again } = makerSetup();
+  client.all[0].close_time = iso(NOW + 125); // 2 min left is the floor
+  await again();
+  assert.equal(store.restingOrders().length, 0);
+});
+
+function liveMaker(vars: Record<string, string> = {}) {
+  const env = makerSetup({ BOT_MODE: "paper", ...vars });
+  const { client, store } = env;
+  const calls: string[] = [];
+  const book: Record<string, any> = {};
+  (client as any).getBalance = async () => 500;
+  (client as any).createMakerOrder = async (ticker: string, side: string, count: number, price: number, exp: number) => {
+    calls.push(`post ${ticker} ${side} ${count} @${price} exp ${exp}`);
+    book.o1 = { order_id: "o1", status: "resting", fill_count: 0, maker_fees_dollars: "0.0000" };
+    return { ...book.o1 };
+  };
+  (client as any).getOrder = async (id: string) => {
+    calls.push(`get ${id}`);
+    return { ...book[id] };
+  };
+  (client as any).cancelOrder = async (id: string) => {
+    calls.push(`cancel ${id}`);
+    book[id] = { ...book[id], status: "canceled" };
+    return { ...book[id] };
+  };
+  (client as any).createOrder = async () => {
+    throw new Error("maker strategies must never take the ask");
+  };
+  store.set("strategy_modes", JSON.stringify({ crypto: "live" }));
+  return { ...env, calls, book };
+}
+
+test("maker (live): books partial fills Kalshi reports, then cancels the rest on expiry", async () => {
+  const { store, again, calls, book } = liveMaker();
+  await again();
+  assert.match(calls[0], /^post KXBTCD-26OCT0911-T80000 yes \d+ @0\.54 exp \d+/);
+  const count = store.restingOrders("live")[0].count;
+  assert.ok(count >= 2);
+  book.o1 = { ...book.o1, fill_count: 1, maker_fees_dollars: "0.0100" };
+  await again(5);
+  let trades = store.openTrades().filter((t) => t.mode === "live");
+  assert.equal(trades.length, 1);
+  assert.equal(trades[0].contracts, 1);
+  assert.equal(trades[0].fee, 0.01);
+  assert.ok(Math.abs(store.openRisk("live") - (trades[0].cost + (count - 1) * 0.54)) < 1e-9);
+  await again(120);
+  assert.ok(calls.includes("cancel o1"));
+  assert.equal((store as any).rows("SELECT status FROM orders WHERE order_id = 'o1'")[0].status, "canceled");
+  trades = store.openTrades().filter((t) => t.mode === "live");
+  assert.equal(trades.length, 1, "only the filled contract is held");
+  assert.ok(Math.abs(store.openRisk("live") - trades[0].cost) < 1e-9, "the cancelled remainder no longer reserves limits");
+});
+
+test("maker (live): kill switch cancels resting orders", async () => {
+  const { store, again, calls } = liveMaker();
+  await again();
+  assert.equal(store.restingOrders("live").length, 1);
+  store.set("kill_switch", "on");
+  await again(1);
+  assert.ok(calls.includes("cancel o1"));
+  assert.equal(store.restingOrders().length, 0);
+});
+
+test("maker (live): an order Kalshi already removed stops reserving limits", async () => {
+  const { store, again, book } = liveMaker();
+  await again();
+  book.o1 = { ...book.o1, status: "canceled" }; // expired on Kalshi's side
+  await again(5);
+  assert.equal(store.restingOrders().length, 0);
+  assert.equal(store.openRisk("live"), 0);
+});
+
+test("maker: limits hold over many ticks with fills", async () => {
+  const { store, client, again } = makerSetup({ MAKER_STRATEGIES: "crypto,ai,sports" });
+  for (let i = 0; i < 20; i++) {
+    client.all[0].yes_ask_dollars = "0.5500"; // bot rests a bid at 54¢
+    await again(5);
+    client.all[0].yes_ask_dollars = "0.5400"; // ...and the market trades down to it
+    await again(5);
+  }
+  assert.ok(store.openTrades().some((t) => t.strategy === "crypto"), "bids did fill");
+  for (const t of new Set(store.openTrades().map((t) => t.ticker))) {
+    const ex = store.marketExposure(t, "paper");
+    assert.ok(ex.orders <= 1 && ex.cost <= 10 + 1e-9, `${t}: ${JSON.stringify(ex)}`);
+  }
+  assert.ok(store.openRisk("paper") <= 50 + 1e-9);
 });

@@ -73,7 +73,7 @@ function memorySql(): Sql {
 }
 
 function setup(kalshiAtlAsk: string, vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", CRYPTO_ENABLED: "false", ARB_ENABLED: "false", AI_ENABLED: "false", SPORTS_LIST: "baseball_mlb", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAKER_STRATEGIES: "none", CRYPTO_ENABLED: "false", ARB_ENABLED: "false", AI_ENABLED: "false", SPORTS_LIST: "baseball_mlb", ...vars });
   const store = new Store(memorySql());
   const ev = "KXMLBGAME-26OCT091908LADATL";
   const atlAsk = Number(kalshiAtlAsk);

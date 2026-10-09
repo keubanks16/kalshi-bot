@@ -88,7 +88,7 @@ function fedMarket() {
 }
 
 function setup(probability: number, confidence: "low" | "medium" | "high" = "high", vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", TRADE_HORIZON: "week", CRYPTO_ENABLED: "false", ARB_ENABLED: "false", MAX_COST_PER_ORDER: "10", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAKER_STRATEGIES: "none", TRADE_HORIZON: "week", CRYPTO_ENABLED: "false", ARB_ENABLED: "false", MAX_COST_PER_ORDER: "10", ...vars });
   const store = new Store(memorySql());
   const market = fedMarket();
   const client = {

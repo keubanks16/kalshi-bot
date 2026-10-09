@@ -8,10 +8,10 @@
 // limit; the full market list is covered over several ticks.
 
 import { HORIZONS, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, type Mode, type Settings, type Strategy } from "./config.ts";
-import { KalshiClient, KalshiError, askSize, dollars, seriesOf, ts, type Market } from "./kalshi.ts";
-import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
+import { KalshiClient, KalshiError, askSize, dollars, makerQuotes, orderFilled, seriesOf, ts, type Market, type Order } from "./kalshi.ts";
+import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, requiredEdge, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
 import type { PriceFeed } from "./prices.ts";
-import type { Store } from "./store.ts";
+import type { OrderRow, Store } from "./store.ts";
 import { AiError, forecast as aiForecast, type Forecast } from "./ai.ts";
 import { SPORTS, fairOdds, fetchOdds, matchGame, tickerDate, easternTickerDate, type OddsResult } from "./sports.ts";
 
@@ -38,6 +38,8 @@ interface BuyOrder {
   pFair?: number | null;
   edge?: number | null;
   note?: string;
+  /** Maker orders only: cancel by this time (unix seconds) even if the usual expiry is later. */
+  expiresAt?: number;
 }
 
 export function tradingDay(epochSeconds: number, timeZone: string): string {
@@ -183,9 +185,15 @@ export class Engine {
       this.lastSettle = now;
     }
     if (this.store.killSwitchOn()) {
+      if (this.store.restingOrders().length) {
+        this.phase = "cancelling resting orders";
+        for (const o of this.store.restingOrders()) await this.cancelResting(o, now);
+      }
       this.status = "Paused — kill switch is on";
       return;
     }
+    this.phase = "checking resting orders";
+    await this.manageOrders(now);
     if (this.s.cryptoEnabled && this.s.liveStreams) {
       this.phase = "connecting price streams";
       await this.feed.ensureStreams?.(this.s.cryptoAssets);
@@ -371,13 +379,24 @@ export class Engine {
         // Humility: the market sees the exact settlement index and we only
         // approximate it, so blend our estimate with the market's own price.
         const p = blendWithMarket(model, dollars(m, "yes_bid"), dollars(m, "yes_ask"), this.s.modelWeight);
+        const limits = { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge };
 
-        const d = decideBinary(p, dollars(m, "yes_ask"), dollars(m, "no_ask"), bankroll, { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge });
+        // A resting bid tends to fill just as the price turns against it, so
+        // re-check it every time: if the edge at our price is gone, pull it.
+        const resting = this.store.restingOrders(this.modeFor("crypto")).find((o) => o.ticker === m.ticker);
+        if (resting) {
+          const left = (resting.side === "yes" ? p : 1 - p) - resting.price - takerFee(100, resting.price, this.s.makerFeeRate) / 100;
+          if (left < requiredEdge(resting.price, limits)) await this.cancelResting(resting, now);
+          continue;
+        }
+
+        const q = this.quotes(m, "crypto");
+        const d = decideBinary(p, q.yes, q.no, bankroll, { ...limits, takerFeeRate: q.feeRate });
         const side = sideOf(d);
         let reason = d.reason;
         if (side && d.price !== undefined) {
-          const filled = await this.buy({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge });
-          reason = filled ? `${d.reason}; bought ${filled} ${side.toUpperCase()} @ $${d.price.toFixed(3)}` : `${d.reason}; not filled or blocked by limits`;
+          const r = await this.enter({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge });
+          reason = `${d.reason}; ${r.message}`;
           this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: d.action, reason, p_fair: p, price: d.price });
           st.lastLogged = now;
         }
@@ -462,7 +481,8 @@ export class Engine {
           const outcome = map.get(m.ticker);
           const p = outcome ? fair.probs[outcome] : undefined;
           if (p === undefined) continue;
-          const d = decideBinary(p, dollars(m, "yes_ask"), dollars(m, "no_ask"), bankroll, { ...this.s, minEdge: this.s.sportsMinEdge });
+          const q = this.quotes(m, "sports");
+          const d = decideBinary(p, q.yes, q.no, bankroll, { ...this.s, minEdge: this.s.sportsMinEdge, takerFeeRate: q.feeRate });
           if (!best || d.edge > best.d.edge) best = { m, d, p, outcome: outcome! };
         }
         if (!best) continue;
@@ -475,7 +495,7 @@ export class Engine {
         let action = `no bet: ${best.d.reason}`;
         const side = sideOf(best.d);
         if (side && best.d.price !== undefined) {
-          const filled = await this.buy({
+          const r = await this.enter({
             strategy: "sports",
             market: best.m,
             side,
@@ -484,10 +504,12 @@ export class Engine {
             pFair: side === "yes" ? best.p : 1 - best.p,
             edge: best.d.edge,
             note: `${label}: ${fair.source} says ${books}`,
+            // never leave a bid resting into the game
+            expiresAt: start - this.s.sportsMinMinutesBeforeStart * 60,
           });
-          if (filled) {
+          if (r.ok) {
             traded++;
-            action = `bought ${filled} ${side.toUpperCase()} @ $${best.d.price.toFixed(2)} (edge ${fmtEdge(best.d.edge)})`;
+            action = `${r.message} (edge ${fmtEdge(best.d.edge)})`;
             this.store.addDecision({ ts: now, strategy: "sports", ticker: best.m.ticker, action: best.d.action, reason: `${label} — books ${books}, Kalshi ${mid}: ${action}`, p_fair: best.p, price: best.d.price });
           } else action = `edge ${fmtEdge(best.d.edge)} but blocked by limits`;
         }
@@ -596,17 +618,18 @@ export class Engine {
     if (f.confidence === "low") {
       action = "no bet: low confidence";
     } else {
-      const d = decideBinary(p, ask, dollars(m, "no_ask"), await this.bankroll(this.modeFor("ai")), { ...this.s, minEdge: this.s.aiMinEdge });
+      const q = this.quotes(m, "ai");
+      const d = decideBinary(p, q.yes, q.no, await this.bankroll(this.modeFor("ai")), { ...this.s, minEdge: this.s.aiMinEdge, takerFeeRate: q.feeRate });
       const side = sideOf(d);
       if (side && d.price !== undefined) {
-        const filled = await this.buy({ strategy: "ai", market: { ...pick, ...m }, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, note: f.summary });
-        action = filled ? `bought ${filled} ${side.toUpperCase()} @ $${d.price.toFixed(2)} (edge ${fmtEdge(d.edge)})` : `edge ${fmtEdge(d.edge)} but blocked by limits`;
+        const r = await this.enter({ strategy: "ai", market: { ...pick, ...m }, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, note: f.summary });
+        action = r.ok ? `${r.message} (edge ${fmtEdge(d.edge)})` : `edge ${fmtEdge(d.edge)} but blocked by limits`;
       } else {
         action = `no bet: ${d.reason}`;
       }
     }
     this.store.addForecast({ ts: now, day, ticker: pick.ticker, title, p: f.probability, confidence: f.confidence, summary: f.summary, market_mid: mid, cost: f.cost, searches: f.searches, action });
-    this.store.addDecision({ ts: now, strategy: "ai", ticker: pick.ticker, action: action.startsWith("bought") ? "buy" : "hold", reason: `AI ${(f.probability * 100).toFixed(0)}% vs market ${mid === null ? "?" : (mid * 100).toFixed(0) + "%"}: ${action}`, p_fair: p, price: mid });
+    this.store.addDecision({ ts: now, strategy: "ai", ticker: pick.ticker, action: action.startsWith("bought") || action.startsWith("posted") ? "buy" : "hold", reason: `AI ${(f.probability * 100).toFixed(0)}% vs market ${mid === null ? "?" : (mid * 100).toFixed(0) + "%"}: ${action}`, p_fair: p, price: mid });
     this.aiStatus = `Last: ${title} — AI ${(f.probability * 100).toFixed(0)}%, ${action}`;
   }
 
@@ -645,6 +668,213 @@ export class Engine {
       room = Math.min(room, s.maxCostPerMarket - ex.cost, s.maxCostPerOrder);
     }
     return Math.max(0, room);
+  }
+
+  // ------------------------------------------------------------ maker orders
+  usesMaker(strategy: Strategy): boolean {
+    return this.s.makerStrategies.includes(strategy);
+  }
+
+  /** Prices a strategy would pay for YES and NO, and the fee rate that goes with them. */
+  quotes(m: Market, strategy: Strategy): { yes: number | null; no: number | null; feeRate: number } {
+    if (!this.usesMaker(strategy)) return { yes: dollars(m, "yes_ask"), no: dollars(m, "no_ask"), feeRate: this.s.takerFeeRate };
+    return { ...makerQuotes(m), feeRate: this.s.makerFeeRate };
+  }
+
+  /** Enter a position the way this strategy is set to: rest a maker bid, or take the ask. */
+  async enter(o: BuyOrder): Promise<{ ok: boolean; message: string }> {
+    const sideUp = o.side.toUpperCase();
+    if (!this.usesMaker(o.strategy)) {
+      const filled = await this.buy(o);
+      return filled ? { ok: true, message: `bought ${filled} ${sideUp} @ $${o.price.toFixed(2)}` } : { ok: false, message: "not filled or blocked by limits" };
+    }
+    const r = await this.placeMaker(o);
+    if (!r.filled && !r.resting) return { ok: false, message: "not posted or blocked by limits" };
+    const parts = [r.filled ? `bought ${r.filled}` : "", r.resting ? `posted ${r.resting}` : ""].filter(Boolean).join(", ");
+    return { ok: true, message: `${parts} ${sideUp} @ $${o.price.toFixed(2)} (maker${r.resting ? ", resting" : ""})` };
+  }
+
+  /** Rest a post-only bid. Its unfilled part counts against every limit until it fills, expires or is cancelled. */
+  async placeMaker(o: BuyOrder): Promise<{ filled: number; resting: number }> {
+    const m = o.market;
+    const mode = this.modeFor(o.strategy);
+    const none = { filled: 0, resting: 0 };
+    if (this.store.openSides(m.ticker, mode).some((side) => side !== o.side)) return none;
+    const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.makerFeeRate);
+    if (contracts < 1) return none;
+
+    const now = this.clock();
+    const close = ts(m.close_time);
+    const ttl = o.strategy === "crypto" ? this.s.makerTtlSeconds : this.s.makerSlowTtlSeconds;
+    const expiresAt = Math.floor(Math.min(now + ttl, close - this.s.minSecondsLeft, o.expiresAt ?? Infinity));
+    if (expiresAt - now < 10) return none;
+
+    let orderId: string;
+    let placed: Order = {};
+    if (mode !== "paper") {
+      try {
+        placed = await this.client.createMakerOrder(m.ticker, o.side, contracts, o.price, expiresAt);
+      } catch (e) {
+        if (e instanceof KalshiError && e.status === 429) throw e;
+        // Post-only orders are rejected if the price would cross; just skip this round.
+        this.lastError = `Maker order on ${m.ticker} failed: ${(e as Error).message}`;
+        return none;
+      }
+      if (!placed.order_id) {
+        this.lastError = `Maker order on ${m.ticker}: Kalshi returned no order id.`;
+        return none;
+      }
+      orderId = placed.order_id;
+    } else {
+      orderId = `paper-${crypto.randomUUID()}`;
+    }
+
+    const row: OrderRow = {
+      id: 0,
+      ts: now,
+      day: tradingDay(now, this.s.timezone),
+      mode,
+      strategy: o.strategy,
+      ticker: m.ticker,
+      event_ticker: m.event_ticker,
+      side: o.side,
+      price: o.price,
+      count: contracts,
+      filled: 0,
+      fee_paid: 0,
+      order_id: orderId,
+      p_fair: o.pFair ?? null,
+      edge: o.edge ?? null,
+      note: o.note ?? null,
+      close_ts: close,
+      expires_ts: expiresAt,
+      status: "resting",
+    };
+    const { id: _id, status: _status, ...insert } = row;
+    row.id = this.store.addOrder(insert);
+    this.bankrollCache.delete(mode);
+    if (mode !== "paper") this.syncOrder(row, placed, now);
+    return { filled: row.filled, resting: row.status === "resting" ? row.count - row.filled : 0 };
+  }
+
+  /** Record any new fills Kalshi reports on a live order, and close it out if Kalshi has. */
+  private syncOrder(row: OrderRow, live: Order, now: number): void {
+    const filled = Math.min(row.count, orderFilled(live));
+    const feeTotal = live.maker_fees_dollars !== undefined ? Number(live.maker_fees_dollars) + Number(live.taker_fees_dollars ?? 0) : null;
+    this.recordFill(row, filled, feeTotal, now);
+    const st = String(live.status ?? "");
+    if (st && st !== "resting") this.closeOrder(row, st === "executed" ? "filled" : "canceled");
+  }
+
+  /** Book fills up to `filledTotal` contracts as trades (each new batch is one trade row). */
+  private recordFill(row: OrderRow, filledTotal: number, feeTotal: number | null, now: number): void {
+    const add = filledTotal - row.filled;
+    if (add < 1) return;
+    const est = takerFee(filledTotal, row.price, this.s.makerFeeRate);
+    const total = feeTotal === null || !Number.isFinite(feeTotal) ? Math.max(est, row.fee_paid) : feeTotal;
+    const fee = Math.max(0, Math.round((total - row.fee_paid) * 10000) / 10000);
+    this.store.addTrade({
+      ts: now,
+      day: tradingDay(now, this.s.timezone),
+      mode: row.mode,
+      strategy: row.strategy,
+      ticker: row.ticker,
+      event_ticker: row.event_ticker,
+      side: row.side,
+      contracts: add,
+      price: row.price,
+      fee,
+      cost: Math.round((add * row.price + fee) * 10000) / 10000,
+      p_fair: row.p_fair,
+      edge: row.edge,
+      note: row.note,
+      order_id: row.order_id,
+      close_ts: row.close_ts,
+    });
+    row.filled = filledTotal;
+    row.fee_paid = row.fee_paid + fee;
+    if (row.filled >= row.count) row.status = "filled";
+    this.store.updateOrder(row.id, row.filled, row.fee_paid, row.status);
+    this.bankrollCache.delete(row.mode);
+    this.store.addDecision({
+      ts: now,
+      strategy: row.strategy,
+      ticker: row.ticker,
+      action: row.side === "yes" ? "buy_yes" : "buy_no",
+      reason: `maker bid filled: bought ${add} ${row.side.toUpperCase()} @ $${row.price.toFixed(2)}${row.filled < row.count ? ` (${row.filled} of ${row.count})` : ""}`,
+      p_fair: row.p_fair,
+      price: row.price,
+    });
+  }
+
+  private closeOrder(row: OrderRow, status: "filled" | "canceled"): void {
+    row.status = row.filled >= row.count ? "filled" : status;
+    this.store.updateOrder(row.id, row.filled, row.fee_paid, row.status);
+    this.bankrollCache.delete(row.mode);
+  }
+
+  /** Each round: pick up fills on resting orders, and cancel any that are stale or near the market's close. */
+  async manageOrders(now: number): Promise<void> {
+    const rows = this.store.restingOrders();
+    if (!rows.length) return;
+
+    // Paper: a resting bid fills only once the market trades down to it (the
+    // ask on our side reaches our price), which is when real ones fill too.
+    const paper = rows.filter((r) => r.mode === "paper");
+    if (paper.length) {
+      const fresh = new Map((await this.client.getMarketsByTicker([...new Set(paper.map((r) => r.ticker))])).map((m) => [m.ticker, m]));
+      for (const r of paper) {
+        const m = fresh.get(r.ticker);
+        const ask = m ? dollars(m, r.side === "yes" ? "yes_ask" : "no_ask") : null;
+        if (ask !== null && ask <= r.price + 1e-9) this.recordFill(r, r.count, null, now);
+      }
+    }
+
+    for (const r of rows) {
+      if (r.status !== "resting") continue;
+      if (r.mode !== "paper") {
+        try {
+          this.syncOrder(r, await this.client.getOrder(r.order_id!), now);
+        } catch (e) {
+          if (e instanceof KalshiError && e.status === 429) throw e;
+          if (e instanceof KalshiError && e.status === 404) this.closeOrder(r, "canceled");
+          else this.lastError = `Checking order on ${r.ticker} failed: ${(e as Error).message}`;
+          continue;
+        }
+        if (r.status !== "resting") continue;
+      }
+      if (now >= r.expires_ts || (r.close_ts !== null && now >= r.close_ts - this.s.minSecondsLeft)) await this.cancelResting(r, now);
+    }
+  }
+
+  /** Cancel a resting order, booking whatever filled before the cancel landed. */
+  async cancelResting(r: OrderRow, now: number): Promise<void> {
+    if (r.mode !== "paper") {
+      try {
+        const final = (await this.client.cancelOrder(r.order_id!)) ?? (await this.client.getOrder(r.order_id!));
+        this.syncOrder(r, { ...final, status: "canceled" }, now);
+        return;
+      } catch (e) {
+        if (e instanceof KalshiError && e.status === 429) throw e;
+        // Already gone (filled, expired or cancelled): read its final state.
+        try {
+          const final = await this.client.getOrder(r.order_id!);
+          this.syncOrder(r, final, now);
+          if (String(final.status ?? "") === "resting") {
+            this.lastError = `Couldn't cancel order on ${r.ticker}: ${(e as Error).message}. Kalshi will expire it.`;
+            return;
+          }
+        } catch {
+          // Can't reach it; Kalshi's own expiry still cancels it. Stop reserving
+          // limits for it only once that expiry has passed.
+          if (now < r.expires_ts) {
+            this.lastError = `Couldn't cancel order on ${r.ticker}: ${(e as Error).message}. Kalshi will expire it.`;
+            return;
+          }
+        }
+      }
+    }
+    this.closeOrder(r, "canceled");
   }
 
   /** Place (or simulate) a buy within every limit. Returns contracts filled. */
