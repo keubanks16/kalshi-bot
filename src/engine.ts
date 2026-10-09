@@ -163,6 +163,10 @@ export class Engine {
       this.status = "Paused — kill switch is on";
       return;
     }
+    if (this.s.cryptoEnabled && this.s.liveStreams) {
+      this.phase = "connecting price streams";
+      await this.feed.ensureStreams?.(this.s.cryptoAssets);
+    }
     const maxClose = this.maxClose(now);
     this.phase = "scanning markets";
     await this.scanPage(now, maxClose);
@@ -172,7 +176,8 @@ export class Engine {
     const label = HORIZONS[this.horizon()].label.toLowerCase();
     this.status =
       `Watching markets closing ${label}: ${this.series.size} crypto series, ` +
-      `${this.lastCycleMarkets || this.cycleMarkets} markets per full scan, ${this.arbEventsChecked} events checked for arbitrage.`;
+      `${this.lastCycleMarkets || this.cycleMarkets} markets per full scan, ${this.arbEventsChecked} events checked for arbitrage` +
+      (this.s.cryptoEnabled && this.feed.describe ? ` · prices from ${this.feed.describe()}.` : ".");
   }
 
   // ------------------------------------------------------------ settlement

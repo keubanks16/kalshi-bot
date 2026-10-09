@@ -28,6 +28,7 @@
     "ARB_ENABLED": "true",
     "CRYPTO_ASSETS": "BTC,ETH,SOL,XRP,DOGE",
     "SERIES_PER_TICK": "3",
+    "LIVE_STREAMS": "false",        // live websocket prices from Coinbase + Kraken; turn on with Workers Paid
 
     "MIN_EDGE": "0.04",
     "MIN_ARB_PROFIT": "0.02",

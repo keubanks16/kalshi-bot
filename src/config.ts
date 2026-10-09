@@ -41,6 +41,7 @@ export interface Settings {
   arbEnabled: boolean;
   cryptoAssets: string[]; // e.g. BTC, ETH, SOL
   seriesPerTick: number; // how many crypto series to re-check each tick
+  liveStreams: boolean; // live websocket prices (best on the Workers Paid plan)
 
   // strategy
   minEdge: number; // expected profit per $1 contract after fees, directional trades
@@ -107,6 +108,7 @@ export function loadSettings(env: Env): Settings {
       .map((a) => a.trim().toUpperCase())
       .filter(Boolean),
     seriesPerTick: num(env, "SERIES_PER_TICK", 3),
+    liveStreams: bool(env, "LIVE_STREAMS", false),
 
     minEdge: num(env, "MIN_EDGE", 0.04),
     minArbProfit: num(env, "MIN_ARB_PROFIT", 0.02),

@@ -10,7 +10,8 @@ A bot can only find a good trade when it has a source of truth that's better tha
 
 **1. Crypto price markets** — BTC, ETH, SOL, XRP and DOGE, at any timeframe (15-minute, hourly, daily…) and any strike type: above, below, or between.
 
-- It gets the coin's live price (the median of Coinbase, Kraken, Bitstamp and Gemini) and its recent volatility.
+- It rebuilds the coin's price the way CF Benchmarks builds the index Kalshi settles on: **order-book mid-prices** from six of the seven constituent exchanges (Coinbase, Kraken, Bitstamp, Gemini, Crypto.com, Bullish; LMAX has no public API), combined as a volume-weighted median. With `LIVE_STREAMS` on, Coinbase and Kraken stream live over websockets; the rest are polled each round.
+- It also measures the coin's recent volatility.
 - It computes the probability the price finishes past the strike, accounting for Kalshi's 60-second settlement average.
 - If YES or NO is cheaper than that probability by more than `MIN_EDGE` after fees, it buys. It sizes the bet with quarter-Kelly.
 - It skips markets that depend on whether a price is touched at any time, since those can't be priced this way.
