@@ -289,6 +289,7 @@ export class Bot extends DurableObject<Env> {
       timezone: tz,
       diag: {
         version: VERSION,
+        kalshiBalanceRaw: (e?.client as { lastBalanceRaw?: unknown } | undefined)?.lastBalanceRaw ?? null,
         phase: e?.phase ?? null,
         rounds: e?.rounds ?? 0,
         lastRoundMs: e?.lastRoundMs ?? null,

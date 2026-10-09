@@ -150,17 +150,18 @@ export function v2Side(side: "yes" | "no", price: number): { side: "bid" | "ask"
  */
 export function parseBreakdown(raw: unknown, total: number): Record<number, number> | null {
   if (!Array.isArray(raw) || !raw.length) return null;
+  // Each entry's number, from balance_dollars when present, else balance.
   const rows = raw.map((b: any) => ({
     i: Number(b?.exchange_index ?? 0),
-    dollars: b?.balance_dollars !== undefined && b?.balance_dollars !== null ? Number(b.balance_dollars) : null,
-    plain: Number(b?.balance ?? 0),
+    v: b?.balance_dollars !== undefined && b?.balance_dollars !== null && b?.balance_dollars !== "" ? Number(b.balance_dollars) : Number(b?.balance ?? 0),
   }));
-  const fixed = rows.reduce((t, r) => t + (r.dollars ?? 0), 0);
-  const plain = rows.reduce((t, r) => t + (r.dollars === null ? r.plain : 0), 0);
-  // How should the plain "balance" numbers be read: as dollars or as cents?
-  const scale = Math.abs(fixed + plain - total) <= Math.abs(fixed + plain / 100 - total) ? 1 : 1 / 100;
+  const sum = rows.reduce((t, r) => t + (Number.isFinite(r.v) ? r.v : 0), 0);
+  // The unit isn't documented reliably (live data came back 100x off), so use
+  // whichever scale makes the shards add up to the account's total balance.
+  const scales = [1, 1 / 100, 100, 1 / 10000];
+  const scale = sum > 0 && total > 0 ? scales.reduce((best, sc) => (Math.abs(sum * sc - total) < Math.abs(sum * best - total) ? sc : best)) : 1;
   const out: Record<number, number> = {};
-  for (const r of rows) out[r.i] = (out[r.i] ?? 0) + (r.dollars ?? r.plain * scale);
+  for (const r of rows) out[r.i] = Math.round(((out[r.i] ?? 0) + (Number.isFinite(r.v) ? r.v : 0) * scale) * 10000) / 10000;
   return out;
 }
 
@@ -192,6 +193,7 @@ export class KalshiClient {
   key: SigningKey | null;
   fetchFn: typeof fetch;
   requests = 0; // subrequests made, for staying under Workers limits
+  lastBalanceRaw: unknown = null; // Kalshi's last balance reply, for /health diagnostics
   timeoutMs = 8000; // never let one request hang a round
   ok = 0;
   lastFailure: Record<string, unknown> | null = null;
@@ -292,6 +294,7 @@ export class KalshiClient {
   async getBalanceDetail(): Promise<{ total: number; byIndex: Record<number, number> | null }> {
     const d = await this.request<{ balance?: number; balance_dollars?: string; balance_breakdown?: { exchange_index?: number; balance?: number; balance_dollars?: string }[] }>("GET", "/portfolio/balance");
     const total = d.balance_dollars !== undefined ? Number(d.balance_dollars) : (d.balance ?? 0) / 100;
+    this.lastBalanceRaw = { balance: d.balance, balance_dollars: d.balance_dollars, balance_breakdown: d.balance_breakdown };
     return { total, byIndex: parseBreakdown(d.balance_breakdown, total) };
   }
 

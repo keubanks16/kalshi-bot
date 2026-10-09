@@ -933,5 +933,7 @@ test("shard balances are read in the right unit (Kalshi sends dollars where cent
   assert.deepEqual(parseBreakdown([{ exchange_index: 0, balance: 5764 }, { exchange_index: 2, balance: 144 }, { exchange_index: 3, balance: 2 }], 59.1), { 0: 57.64, 2: 1.44, 3: 0.02 });
   // explicit dollar strings, and index 0 left out (zero values omitted)
   assert.deepEqual(parseBreakdown([{ balance_dollars: "57.6400" }, { exchange_index: 2, balance_dollars: "1.4400" }], 59.08), { 0: 57.64, 2: 1.44 });
+  // a dollars field that is itself 100x too small (what the live account showed)
+  assert.deepEqual(parseBreakdown([{ exchange_index: 0, balance_dollars: "0.5707" }, { exchange_index: 2, balance_dollars: "0.0201" }, { exchange_index: 3, balance_dollars: "0.0002" }], 59.1), { 0: 57.07, 2: 2.01, 3: 0.02 });
   assert.equal(parseBreakdown([], 1), null);
 });
