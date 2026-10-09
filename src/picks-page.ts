@@ -11,7 +11,7 @@ const signedPct = (x: number) => `${x >= 0 ? "+" : "−"}${Math.abs(Math.round(x
 export function renderPicks(s: Snapshot, opts: { authed: boolean }, f: Fmt): string {
   const { esc, date, time } = f;
   const pp = s.picks;
-  if (!pp) return `<div class="card"><div class="sub">The PrizePicks finder is starting up…</div></div>`;
+  if (!pp) return `<div class="card"><div class="sub">The bot is still on the previous version and hasn't picked up the PrizePicks update yet. Refresh in a minute; if this stays for more than a few minutes, deploy again.</div></div>`;
   const v = pp.view;
   const when = (iso: string) => {
     const t = Date.parse(iso) / 1000;
