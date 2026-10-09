@@ -937,3 +937,15 @@ test("shard balances are read in the right unit (Kalshi sends dollars where cent
   assert.deepEqual(parseBreakdown([{ exchange_index: 0, balance_dollars: "0.5707" }, { exchange_index: 2, balance_dollars: "0.0201" }, { exchange_index: 3, balance_dollars: "0.0002" }], 59.1), { 0: 57.07, 2: 2.01, 3: 0.02 });
   assert.equal(parseBreakdown([], 1), null);
 });
+
+test("a crypto series with a resting bid is re-checked every round, so a stale bid is pulled fast", async () => {
+  const { engine, store, again } = makerSetup();
+  await again();
+  assert.equal(store.restingOrders().length, 1);
+  // don't force a re-check: the series isn't due for a while on its own
+  engine.series.forEach((st) => (st.nextCheck = NOW + 3600));
+  (engine.feed as any).spot = async () => 79900; // edge gone
+  (engine as any).clock = () => NOW + 10;
+  await engine.tick();
+  assert.equal(store.restingOrders().length, 0, "pulled on the very next round");
+});

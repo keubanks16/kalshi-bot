@@ -384,7 +384,11 @@ export class Engine {
 
   // --------------------------------------------------------------- crypto
   async runCrypto(now: number, maxClose: number | null): Promise<void> {
-    const due = [...this.series.entries()].filter(([, st]) => st.nextCheck <= now).sort((a, b) => a[1].nextCheck - b[1].nextCheck).slice(0, this.s.seriesPerTick);
+    // A series with a resting bid is re-priced every round, so a bid whose edge
+    // disappears is pulled within seconds instead of waiting for its next check.
+    const guarding = new Set(this.store.restingOrders(this.modeFor("crypto")).filter((o) => o.strategy === "crypto").map((o) => seriesOf(o.event_ticker)));
+    const scheduled = [...this.series.entries()].filter(([name, st]) => st.nextCheck <= now && !guarding.has(name)).sort((a, b) => a[1].nextCheck - b[1].nextCheck).slice(0, this.s.seriesPerTick);
+    const due = [...[...this.series.entries()].filter(([name]) => guarding.has(name)), ...scheduled];
 
     for (const [series, st] of due) {
       this.phase = `pricing ${series}`;
