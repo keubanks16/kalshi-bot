@@ -1,25 +1,23 @@
-// PrizePicks pick finder. It never places entries: it reads PrizePicks'
-// player-prop lines, compares each with sportsbook player-prop odds for the
-// same player, stat and line, and lists the picks the books say are most
-// likely to hit, plus the best power-play slips built from them.
+// PrizePicks pick finder. It never places entries and never touches
+// PrizePicks' own site: The Odds API licenses PrizePicks' lines (bookmaker
+// "prizepicks", region "us_dfs"), so one request per game returns both the
+// PrizePicks lines and the sportsbooks' player-prop odds for the same game.
 //
-// Fair probabilities: each book's over/under prices are de-vigged (scaled to
-// sum to 100%), then the median across books is used. When no book has the
-// exact PrizePicks line, a book line on the far side still gives a safe
-// lower bound: if the book says 58% over 74.5 yards, "More than 69.5" is at
-// least 58%. Bounds are shown with "≥" and never overstate the chance.
+// Fair probabilities: each sportsbook's over/under prices are de-vigged
+// (scaled to sum to 100%), then the median across books is used. When no
+// book has the exact PrizePicks line, a book line on the far side still gives
+// a safe lower bound: if the books say 58% over 74.5 yards, "More than 69.5"
+// is at least 58%. Bounds are shown with "≥" and never overstate the chance.
 
-import { devig, teamMatches } from "./sports.ts";
-
-// ------------------------------------------------------------------ settings
+import { devig } from "./sports.ts";
 
 export interface PicksSettings {
   enabled: boolean;
   sports: string[]; // The Odds API sport keys
+  markets: string[]; // Odds API player-prop market keys to price
   intervalMinutes: number;
   dailyCredits: number; // Odds API credits this finder may use per day (separate from Kalshi sports)
-  regions: string;
-  marketsPerGame: number; // most stat types to price per game (each costs credits)
+  regions: string; // must include us_dfs (PrizePicks) and a sportsbook region
   hoursAhead: number;
   minBooks: number;
   payouts: Record<number, number>; // power play: number of picks -> payout multiplier
@@ -36,155 +34,88 @@ export function parsePayouts(raw: string): Record<number, number> {
   return out;
 }
 
-// ------------------------------------------------------------- stat mapping
+/** Pick'em / DFS sites in The Odds API's us_dfs region: lines to bet, not sportsbooks to price from. */
+export const DFS_BOOKS = ["prizepicks", "underdog", "pick6", "dabble_us_dfs"];
 
-const FOOTBALL: Record<string, string> = {
-  passyards: "player_pass_yds",
-  passingyards: "player_pass_yds",
-  passtds: "player_pass_tds",
-  passingtds: "player_pass_tds",
-  passcompletions: "player_pass_completions",
-  passattempts: "player_pass_attempts",
-  intthrown: "player_pass_interceptions",
-  passints: "player_pass_interceptions",
-  rushyards: "player_rush_yds",
-  rushingyards: "player_rush_yds",
-  rushattempts: "player_rush_attempts",
-  receivingyards: "player_reception_yds",
-  recyards: "player_reception_yds",
-  receptions: "player_receptions",
-  rushrecyds: "player_rush_reception_yds",
-  rushrecyards: "player_rush_reception_yds",
-  passrushyds: "player_pass_rush_yds",
-  passrushyards: "player_pass_rush_yds",
-  longestreception: "player_reception_longest",
-  longestrush: "player_rush_longest",
-};
-const BASKETBALL: Record<string, string> = {
-  points: "player_points",
-  rebounds: "player_rebounds",
-  assists: "player_assists",
-  ptsrebsasts: "player_points_rebounds_assists",
-  ptsrebs: "player_points_rebounds",
-  ptsasts: "player_points_assists",
-  rebsasts: "player_rebounds_assists",
-  "3ptmade": "player_threes",
-  blockedshots: "player_blocks",
-  steals: "player_steals",
-  turnovers: "player_turnovers",
-};
-const BASEBALL: Record<string, string> = {
-  pitcherstrikeouts: "pitcher_strikeouts",
-  hitsallowed: "pitcher_hits_allowed",
-  earnedrunsallowed: "pitcher_earned_runs",
-  walksallowed: "pitcher_walks",
-  pitchingouts: "pitcher_outs",
-  totalbases: "batter_total_bases",
-  hits: "batter_hits",
-  runs: "batter_runs_scored",
-  rbis: "batter_rbis",
-  hitsrunsrbis: "batter_hits_runs_rbis",
-};
-const HOCKEY: Record<string, string> = {
-  shotsongoal: "player_shots_on_goal",
-  points: "player_points",
-  assists: "player_assists",
-  goaliesaves: "player_total_saves",
-  blockedshots: "player_blocked_shots",
+export const SPORT_LABELS: Record<string, string> = {
+  americanfootball_ncaaf: "College football",
+  americanfootball_nfl: "NFL",
+  basketball_nba: "NBA",
+  basketball_ncaab: "College basketball",
+  basketball_wnba: "WNBA",
+  baseball_mlb: "MLB",
+  icehockey_nhl: "NHL",
 };
 
-/** Odds API sport key -> PrizePicks league name, fallback league id, and stat names it can price. */
-export const PP_SPORTS: Record<string, { league: string; leagueId: number; label: string; stats: Record<string, string> }> = {
-  americanfootball_ncaaf: { league: "CFB", leagueId: 15, label: "College football", stats: FOOTBALL },
-  americanfootball_nfl: { league: "NFL", leagueId: 9, label: "NFL", stats: FOOTBALL },
-  basketball_nba: { league: "NBA", leagueId: 7, label: "NBA", stats: BASKETBALL },
-  basketball_ncaab: { league: "CBB", leagueId: 20, label: "College basketball", stats: BASKETBALL },
-  basketball_wnba: { league: "WNBA", leagueId: 3, label: "WNBA", stats: BASKETBALL },
-  baseball_mlb: { league: "MLB", leagueId: 2, label: "MLB", stats: BASEBALL },
-  icehockey_nhl: { league: "NHL", leagueId: 8, label: "NHL", stats: HOCKEY },
+/** Readable stat names for Odds API player-prop markets. */
+export const MARKET_LABELS: Record<string, string> = {
+  player_pass_yds: "Pass Yards",
+  player_pass_tds: "Pass TDs",
+  player_pass_completions: "Pass Completions",
+  player_pass_attempts: "Pass Attempts",
+  player_pass_interceptions: "INTs Thrown",
+  player_rush_yds: "Rush Yards",
+  player_rush_attempts: "Rush Attempts",
+  player_reception_yds: "Receiving Yards",
+  player_receptions: "Receptions",
+  player_rush_reception_yds: "Rush+Rec Yds",
+  player_pass_rush_yds: "Pass+Rush Yds",
+  player_points: "Points",
+  player_rebounds: "Rebounds",
+  player_assists: "Assists",
+  player_threes: "3-PT Made",
+  player_points_rebounds_assists: "Pts+Rebs+Asts",
+  pitcher_strikeouts: "Pitcher Strikeouts",
+  batter_total_bases: "Total Bases",
+  player_shots_on_goal: "Shots On Goal",
 };
-
-const statKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** Player names compared loosely: case, punctuation and Jr./III suffixes ignored. */
 export function normName(s: string): string {
   return s
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z ]/g, "")
     .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-// ------------------------------------------------------------ PrizePicks lines
-
 export interface PPLine {
-  id: string;
   player: string;
-  team: string; // team name or abbreviation as PrizePicks shows it
-  opponent: string;
-  stat: string; // as PrizePicks shows it, e.g. "Rush Yards"
-  market: string; // Odds API market key
+  stat: string;
+  market: string;
   line: number;
-  start: string; // ISO
 }
 
-/** Standard PrizePicks lines (no goblins/demons, no promos) that a sportsbook market can price. */
-export function parseProjections(json: any, stats: Record<string, string>): PPLine[] {
-  const players = new Map<string, any>();
-  for (const inc of json?.included ?? []) if (inc?.type === "new_player") players.set(String(inc.id), inc.attributes ?? {});
+/** PrizePicks' standard lines in an Odds API event-odds response (one per player, stat and line). */
+export function extractPPLines(ev: any): PPLine[] {
+  const seen = new Set<string>();
   const out: PPLine[] = [];
-  for (const p of json?.data ?? []) {
-    const a = p?.attributes ?? {};
-    if ((a.odds_type ?? "standard") !== "standard" || a.is_promo) continue;
-    if (a.status && a.status !== "pre_game") continue;
-    const market = stats[statKey(String(a.stat_type ?? ""))];
-    const line = Number(a.line_score);
-    if (!market || !Number.isFinite(line)) continue;
-    const pl = players.get(String(p?.relationships?.new_player?.data?.id ?? ""));
-    const name = String(pl?.display_name ?? pl?.name ?? "");
-    if (!name || name.includes("+")) continue; // combo-player lines can't be priced
-    out.push({
-      id: String(p.id),
-      player: name,
-      team: String(pl?.team_name ?? pl?.market ?? pl?.team ?? ""),
-      opponent: String(a.description ?? ""),
-      stat: String(a.stat_type),
-      market,
-      line,
-      start: String(a.start_time ?? ""),
-    });
+  for (const b of ev?.bookmakers ?? []) {
+    if (b?.key !== "prizepicks") continue;
+    for (const m of b?.markets ?? []) {
+      const market = String(m?.key ?? "");
+      if (market.endsWith("_alternate")) continue; // goblins and demons
+      for (const o of m?.outcomes ?? []) {
+        const player = String(o?.description ?? "").trim();
+        const line = Number(o?.point);
+        const k = `${market}|${normName(player)}|${line}`;
+        if (!player || !Number.isFinite(line) || seen.has(k)) continue;
+        seen.add(k);
+        out.push({ player, stat: MARKET_LABELS[market] ?? market, market, line });
+      }
+    }
   }
   return out;
 }
-
-// ------------------------------------------------------------- sportsbooks
 
 export interface OddsEvent {
   id: string;
   commence_time: string;
   home_team: string;
   away_team: string;
-}
-
-/** The sportsbook game a PrizePicks line belongs to: same kickoff (±20 min) and team. */
-export function matchEvent(line: PPLine, events: OddsEvent[]): OddsEvent | null {
-  const t = Date.parse(line.start);
-  const near = events.filter((e) => Math.abs(Date.parse(e.commence_time) - t) <= 20 * 60_000);
-  if (line.team) {
-    // "Georgia" starts both "Georgia Bulldogs" and "Georgia Tech Yellow Jackets":
-    // prefer the name with the fewest words left over, and skip true ties.
-    const extra = (full: string) => (teamMatches(line.team, full) ? normName(full).split(" ").length - normName(line.team).split(" ").length : Infinity);
-    const scored = near.map((e) => ({ e, d: Math.min(extra(e.home_team), extra(e.away_team)) })).filter((x) => x.d !== Infinity);
-    if (scored.length) {
-      const best = Math.min(...scored.map((x) => x.d));
-      const top = scored.filter((x) => x.d === best);
-      return top.length === 1 ? top[0].e : null;
-    }
-  }
-  return near.length === 1 ? near[0] : null;
 }
 
 /** One book's de-vigged over chance for a player/stat/line. */
@@ -197,9 +128,10 @@ export interface Quote {
 }
 
 /** Pull every player over/under pair out of an Odds API event-odds response. */
-export function extractQuotes(ev: any): Quote[] {
+export function extractQuotes(ev: any, skip: string[] = DFS_BOOKS): Quote[] {
   const out: Quote[] = [];
   for (const b of ev?.bookmakers ?? []) {
+    if (skip.includes(String(b?.key))) continue; // pick'em sites aren't sportsbooks
     for (const m of b?.markets ?? []) {
       const pairs = new Map<string, { over?: number; under?: number; player: string; point: number }>();
       for (const o of m?.outcomes ?? []) {
@@ -337,16 +269,10 @@ export interface KV {
 
 type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
-const PP_HEADERS = {
-  Accept: "application/json",
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36",
-  Referer: "https://app.prizepicks.com/",
-  Origin: "https://app.prizepicks.com",
-};
-
 interface CacheEntry {
   ts: number;
   markets: string[];
+  lines: PPLine[];
   quotes: Quote[];
 }
 
@@ -388,35 +314,19 @@ export class PicksScanner {
     return this.enabled() && !!this.oddsKey && now - Number(this.store.get("picks_last_ts") ?? 0) >= this.s.intervalMinutes * 60;
   }
 
-  private save(v: PicksView) {
-    this.store.set("picks_view", JSON.stringify(v));
-  }
-
-  private async json(url: string, headers?: Record<string, string>): Promise<{ body: any; res: Response }> {
-    const res = await this.fetchFn(url, { headers, signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) throw new Error(`${new URL(url).host} ${res.status}: ${(await res.text()).slice(0, 120)}`);
+  private async json(url: string): Promise<{ body: any; res: Response }> {
+    const res = await this.fetchFn(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) throw new Error(`Odds API ${res.status}: ${(await res.text()).slice(0, 120)}`);
     return { body: await res.json(), res };
-  }
-
-  private async leagueId(league: string, fallback: number): Promise<number> {
-    try {
-      const cached = JSON.parse(this.store.get("pp_leagues") ?? "{}");
-      if (cached[league]) return cached[league];
-      const { body } = await this.json("https://api.prizepicks.com/leagues", PP_HEADERS);
-      const map: Record<string, number> = {};
-      for (const l of body?.data ?? []) if (l?.attributes?.name) map[String(l.attributes.name)] = Number(l.id);
-      if (Object.keys(map).length) this.store.set("pp_leagues", JSON.stringify(map));
-      return map[league] ?? fallback;
-    } catch {
-      return fallback;
-    }
   }
 
   async run(now: number): Promise<PicksView> {
     this.store.set("picks_last_ts", String(now));
     const creditKey = `pp_credits_${dayOf(now, this.s.timezone)}`;
     let used = Number(this.store.get(creditKey) ?? 0);
-    const perMarket = this.s.regions.split(",").filter(Boolean).length;
+    const regions = this.s.regions.split(",").map((r) => r.trim()).filter(Boolean);
+    const cost = this.s.markets.length * regions.length;
+    const key = encodeURIComponent(this.oddsKey);
     let cache: Record<string, CacheEntry> = {};
     try {
       cache = JSON.parse(this.store.get("pp_props_cache") ?? "{}");
@@ -427,81 +337,59 @@ export class PicksScanner {
     const problems: string[] = [];
     let linesSeen = 0;
     let priced = 0;
+    let games = 0;
     let budgetHit = false;
 
     for (const sportKey of this.s.sports) {
-      const sport = PP_SPORTS[sportKey];
-      if (!sport) continue;
-      // 1. PrizePicks lines (free).
-      let lines: PPLine[];
-      try {
-        const id = await this.leagueId(sport.league, sport.leagueId);
-        const { body } = await this.json(`https://api.prizepicks.com/projections?league_id=${id}&per_page=1000&single_stat=true`, PP_HEADERS);
-        lines = parseProjections(body, sport.stats);
-      } catch (e) {
-        problems.push(`PrizePicks ${sport.label}: ${(e as Error).message}`);
-        continue;
-      }
-      const soon = lines.filter((l) => {
-        const t = Date.parse(l.start) / 1000;
-        return t - now > 5 * 60 && t - now < this.s.hoursAhead * 3600;
-      });
-      linesSeen += soon.length;
-      if (!soon.length) continue;
-
-      // 2. Sportsbook game list (free).
+      const label = SPORT_LABELS[sportKey] ?? sportKey;
+      // 1. Upcoming games (free).
       let events: OddsEvent[];
       try {
-        events = (await this.json(`https://api.the-odds-api.com/v4/sports/${sportKey}/events?apiKey=${encodeURIComponent(this.oddsKey)}`)).body;
+        events = (await this.json(`https://api.the-odds-api.com/v4/sports/${sportKey}/events?apiKey=${key}`)).body;
       } catch (e) {
-        problems.push(`Odds API ${sport.label}: ${(e as Error).message}`);
+        problems.push(`${label}: ${(e as Error).message}`);
         continue;
       }
-      const byEvent = new Map<string, { ev: OddsEvent; lines: PPLine[] }>();
-      for (const l of soon) {
-        const ev = matchEvent(l, events);
-        if (!ev) continue;
-        const g = byEvent.get(ev.id) ?? { ev, lines: [] };
-        g.lines.push(l);
-        byEvent.set(ev.id, g);
-      }
+      const soon = events
+        .filter((e) => {
+          const t = Date.parse(e.commence_time) / 1000;
+          return t - now > 5 * 60 && t - now < this.s.hoursAhead * 3600;
+        })
+        .sort((a, b) => Date.parse(a.commence_time) - Date.parse(b.commence_time));
 
-      // 3. Player props per game (paid), soonest games first, reusing recent results.
-      const games = [...byEvent.values()].sort((a, b) => Date.parse(a.ev.commence_time) - Date.parse(b.ev.commence_time));
-      for (const { ev, lines: gl } of games) {
-        const count = new Map<string, number>();
-        for (const l of gl) count.set(l.market, (count.get(l.market) ?? 0) + 1);
-        const markets = [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, this.s.marketsPerGame).map(([m]) => m);
+      // 2. PrizePicks lines + sportsbook props per game (paid), soonest first, reusing recent results.
+      for (const ev of soon) {
         let entry: CacheEntry | undefined = cache[ev.id];
-        const fresh = entry && now - entry.ts < this.s.intervalMinutes * 60 && markets.every((m) => entry!.markets.includes(m));
+        const fresh = entry && now - entry.ts < this.s.intervalMinutes * 60 && this.s.markets.every((m) => entry!.markets.includes(m));
         if (!fresh) {
-          const cost = markets.length * perMarket;
           if (used + cost > this.s.dailyCredits) {
             budgetHit = true;
           } else {
             try {
-              const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/events/${ev.id}/odds?apiKey=${encodeURIComponent(this.oddsKey)}&regions=${this.s.regions}&markets=${markets.join(",")}&oddsFormat=decimal`;
+              const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/events/${ev.id}/odds?apiKey=${key}&regions=${regions.join(",")}&markets=${this.s.markets.join(",")}&oddsFormat=decimal`;
               const { body, res } = await this.json(url);
               used += Number(res.headers.get("x-requests-last") ?? cost);
               this.store.set(creditKey, String(used));
               const rem = res.headers.get("x-requests-remaining");
               if (rem !== null) this.oddsRemaining = Number(rem);
-              entry = { ts: now, markets, quotes: extractQuotes(body) };
+              entry = { ts: now, markets: this.s.markets, lines: extractPPLines(body), quotes: extractQuotes(body) };
               cache[ev.id] = entry;
             } catch (e) {
-              problems.push(`Odds API props: ${(e as Error).message}`);
+              problems.push(`${label} props: ${(e as Error).message}`);
             }
           }
         }
         if (!entry) continue;
-        for (const l of gl) {
+        games++;
+        linesSeen += entry.lines.length;
+        for (const l of entry.lines) {
           const f = fairFor(l, entry.quotes, this.s.minBooks);
           if (!f) continue;
           priced++;
           picks.push({
             player: l.player,
-            team: l.team,
-            opponent: l.opponent,
+            team: `${ev.away_team} @ ${ev.home_team}`,
+            opponent: "",
             stat: l.stat,
             line: l.line,
             side: f.side,
@@ -509,9 +397,9 @@ export class PicksScanner {
             books: f.books,
             exact: f.exact,
             bookLine: f.bookLine,
-            start: l.start,
+            start: ev.commence_time,
             game: ev.id,
-            sport: sport.label,
+            sport: label,
           });
         }
       }
@@ -520,14 +408,20 @@ export class PicksScanner {
 
     picks.sort((a, b) => b.p - a.p);
     const slips = bestSlips(picks, this.s.payouts);
-    const sports = this.s.sports.map((k) => PP_SPORTS[k]?.label ?? k).join(", ");
-    const status = problems.length && !priced
-      ? problems.join(" · ")
-      : !linesSeen
-        ? `No ${sports} PrizePicks lines in the next ${this.s.hoursAhead} hours.`
-        : `Priced ${priced} of ${linesSeen} ${sports} lines against the sportsbooks${budgetHit ? `; daily odds budget used (${used} of ${this.s.dailyCredits} credits), so some games weren't checked` : ""}. Next check in ${this.s.intervalMinutes} min.${problems.length ? ` (${problems.join(" · ")})` : ""}`;
+    const sports = this.s.sports.map((k) => SPORT_LABELS[k] ?? k).join(", ");
+    const budget = budgetHit ? `; daily odds budget used (${used} of ${this.s.dailyCredits} credits), so later games weren't checked` : "";
+    const status =
+      problems.length && !games
+        ? problems.join(" · ")
+        : !games
+          ? budgetHit
+            ? `Daily odds budget used (${used} of ${this.s.dailyCredits} credits). Resumes tomorrow.`
+            : `No ${sports} games in the next ${this.s.hoursAhead} hours.`
+          : !linesSeen
+            ? `Checked ${games} ${sports} game${games > 1 ? "s" : ""}, but PrizePicks has no lines posted for them yet${budget}.`
+            : `Priced ${priced} of ${linesSeen} PrizePicks lines in ${games} ${sports} game${games > 1 ? "s" : ""}${budget}. Next check in ${this.s.intervalMinutes} min.${problems.length ? ` (${problems.join(" · ")})` : ""}`;
     const v: PicksView = { ts: now, status, picks: picks.slice(0, 40), slips, linesSeen, priced };
-    this.save(v);
+    this.store.set("picks_view", JSON.stringify(v));
     return v;
   }
 }

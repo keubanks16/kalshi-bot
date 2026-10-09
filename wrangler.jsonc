@@ -49,15 +49,15 @@
     "SPORTS_REGIONS": "eu,us",      // eu includes Pinnacle; each region costs 1 credit per sport per check
     "SPORTS_DAILY_CREDITS": "16",   // ~480/month, fits the free plan; raise if you buy a bigger plan
 
-    // PrizePicks finder (dashboard tab): compares PrizePicks lines with sportsbook player props.
-    // Read-only: it never places entries. Uses the same ODDS_API_KEY, with its own daily credit cap.
+    // PrizePicks finder (dashboard tab): PrizePicks lines vs sportsbook player props, both from
+    // The Odds API (PrizePicks is its "us_dfs" region). Read-only: it never places entries.
     "PRIZEPICKS_ENABLED": "true",
     "PRIZEPICKS_SPORTS": "americanfootball_ncaaf",   // also: americanfootball_nfl, basketball_nba, baseball_mlb, icehockey_nhl…
-    "PRIZEPICKS_INTERVAL_MINUTES": "60",
-    "PRIZEPICKS_DAILY_CREDITS": "30",   // props cost 1 credit per stat type per region per game
-    "PRIZEPICKS_REGIONS": "us",
-    "PRIZEPICKS_MARKETS_PER_GAME": "3", // price the 3 stat types with the most PrizePicks lines in each game
-    "PRIZEPICKS_HOURS_AHEAD": "36",
+    "PRIZEPICKS_MARKETS": "player_pass_yds,player_rush_yds,player_reception_yds",
+    "PRIZEPICKS_REGIONS": "us,us_dfs",  // us = sportsbooks, us_dfs = PrizePicks
+    "PRIZEPICKS_DAILY_CREDITS": "60",   // each game costs markets × regions credits (6 with the defaults)
+    "PRIZEPICKS_INTERVAL_MINUTES": "120",
+    "PRIZEPICKS_HOURS_AHEAD": "24",
     "PRIZEPICKS_MIN_BOOKS": "1",
     "PRIZEPICKS_POWER_PAYOUTS": "2:3,3:5,4:10,5:20,6:37.5", // set to what your PrizePicks app shows
 

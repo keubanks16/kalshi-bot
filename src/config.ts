@@ -195,11 +195,14 @@ export function loadPicksSettings(env: Env): PicksSettings {
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean),
-    intervalMinutes: num(env, "PRIZEPICKS_INTERVAL_MINUTES", 60),
-    dailyCredits: num(env, "PRIZEPICKS_DAILY_CREDITS", 30),
-    regions: str(env, "PRIZEPICKS_REGIONS", "us"),
-    marketsPerGame: num(env, "PRIZEPICKS_MARKETS_PER_GAME", 3),
-    hoursAhead: num(env, "PRIZEPICKS_HOURS_AHEAD", 36),
+    markets: str(env, "PRIZEPICKS_MARKETS", "player_pass_yds,player_rush_yds,player_reception_yds")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean),
+    intervalMinutes: num(env, "PRIZEPICKS_INTERVAL_MINUTES", 120),
+    dailyCredits: num(env, "PRIZEPICKS_DAILY_CREDITS", 60),
+    regions: str(env, "PRIZEPICKS_REGIONS", "us,us_dfs"),
+    hoursAhead: num(env, "PRIZEPICKS_HOURS_AHEAD", 24),
     minBooks: num(env, "PRIZEPICKS_MIN_BOOKS", 1),
     payouts: parsePayouts(str(env, "PRIZEPICKS_POWER_PAYOUTS", "2:3,3:5,4:10,5:20,6:37.5")),
     timezone: str(env, "BOT_TIMEZONE", "America/New_York"),

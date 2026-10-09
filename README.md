@@ -41,13 +41,12 @@ A bot can only find a good trade when it has a source of truth that's better tha
 - It bets on the team (YES or NO) when Kalshi's price is at least 3¢ better than fair after fees. It only bets before the game starts, and only once per game.
 - Odds API credits are capped per day (`SPORTS_DAILY_CREDITS`, default 16, about 480 a month, which fits the free plan). The dashboard shows what's used and what's left.
 
-**PrizePicks finder** (its own dashboard tab, college football by default). It only finds picks; you place them yourself in the PrizePicks app, since PrizePicks doesn't allow automated entries.
+**PrizePicks finder** (its own dashboard tab, college football by default). It only finds picks; you place them yourself in the PrizePicks app.
 
-- Every hour it reads PrizePicks' standard lines and the sportsbooks' player-prop odds (same `ODDS_API_KEY`) for the same player, stat and line.
-- It removes the books' margin to get the chance each More/Less hits. If no book has PrizePicks' exact line, a book line further out gives a safe minimum, shown as "≥".
+- PrizePicks' lines come from The Odds API (bookmaker `prizepicks` in the `us_dfs` region), the same `ODDS_API_KEY`, so the bot never touches PrizePicks' own site. Each request returns PrizePicks' lines and the sportsbooks' player-prop odds for one game.
+- It removes the books' margin to get the chance each More/Less hits. If no book has PrizePicks' exact line, a book line further out gives a safe minimum, shown as "≥". Only standard lines are used (goblins and demons are left out).
 - It lists the top picks and the best 2–6 pick power plays (one pick per game), with the expected profit per $1 from `PRIZEPICKS_POWER_PAYOUTS`.
-- Player props cost more Odds API credits than game odds (1 per stat type per game), so it has its own cap, `PRIZEPICKS_DAILY_CREDITS` (default 30), and prices only the busiest stat types in each game.
-- PrizePicks has no official API. The finder reads the public lines their app uses, which can change or be blocked without notice; the tab shows the error if that happens.
+- Each game costs stat types × regions credits (3 × 2 = 6 by default), soonest games first, re-checked every 2 hours, capped by `PRIZEPICKS_DAILY_CREDITS` (default 60, about 10 games a day). Raise it if your Odds API plan allows.
 
 **Strategy switches:** the dashboard's **Strategies** card turns Crypto, AI forecaster, Sports and Arbitrage on or off instantly. Open bets stay open and settle normally.
 
