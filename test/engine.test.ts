@@ -924,3 +924,14 @@ test("dashboard Move cash: moves what you ask, only if the source shard has it",
   assert.equal((await a.engine.moveCash(2, 2, 1)).ok, false);
   assert.equal(moves.length, 1, "nothing else moved");
 });
+
+test("shard balances are read in the right unit (Kalshi sends dollars where cents were expected)", async () => {
+  const { parseBreakdown } = await import("../src/kalshi.ts");
+  // what the real account returned: total $59.10, shards in dollars
+  assert.deepEqual(parseBreakdown([{ exchange_index: 0, balance: 57.64 }, { exchange_index: 1, balance: 0 }, { exchange_index: 2, balance: 1.44 }, { exchange_index: 3, balance: 0.02 }], 59.1), { 0: 57.64, 1: 0, 2: 1.44, 3: 0.02 });
+  // the same in cents, as the docs describe
+  assert.deepEqual(parseBreakdown([{ exchange_index: 0, balance: 5764 }, { exchange_index: 2, balance: 144 }, { exchange_index: 3, balance: 2 }], 59.1), { 0: 57.64, 2: 1.44, 3: 0.02 });
+  // explicit dollar strings, and index 0 left out (zero values omitted)
+  assert.deepEqual(parseBreakdown([{ balance_dollars: "57.6400" }, { exchange_index: 2, balance_dollars: "1.4400" }], 59.08), { 0: 57.64, 2: 1.44 });
+  assert.equal(parseBreakdown([], 1), null);
+});

@@ -142,6 +142,28 @@ export function v2Side(side: "yes" | "no", price: number): { side: "bid" | "ask"
   return { side: side === "yes" ? "bid" : "ask", price: (Math.round(yesPrice * 10000) / 10000).toFixed(4) };
 }
 
+/**
+ * Per-shard balances in dollars. Kalshi's breakdown has been seen in dollars
+ * (e.g. "57.64") where the docs suggest cents, so each entry's unit is checked:
+ * a _dollars field is dollars; otherwise pick whichever reading (dollars or
+ * cents) makes the shards add up to the account total.
+ */
+export function parseBreakdown(raw: unknown, total: number): Record<number, number> | null {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const rows = raw.map((b: any) => ({
+    i: Number(b?.exchange_index ?? 0),
+    dollars: b?.balance_dollars !== undefined && b?.balance_dollars !== null ? Number(b.balance_dollars) : null,
+    plain: Number(b?.balance ?? 0),
+  }));
+  const fixed = rows.reduce((t, r) => t + (r.dollars ?? 0), 0);
+  const plain = rows.reduce((t, r) => t + (r.dollars === null ? r.plain : 0), 0);
+  // How should the plain "balance" numbers be read: as dollars or as cents?
+  const scale = Math.abs(fixed + plain - total) <= Math.abs(fixed + plain / 100 - total) ? 1 : 1 / 100;
+  const out: Record<number, number> = {};
+  for (const r of rows) out[r.i] = (out[r.i] ?? 0) + (r.dollars ?? r.plain * scale);
+  return out;
+}
+
 /** A V2 create-order reply in the shape the engine reads (fills, fees, status). */
 export function fromV2(r: V2OrderReply, count: number, timeInForce: string): Order {
   const filled = Math.floor(Number(r.fill_count ?? 0)) || 0;
@@ -270,15 +292,7 @@ export class KalshiClient {
   async getBalanceDetail(): Promise<{ total: number; byIndex: Record<number, number> | null }> {
     const d = await this.request<{ balance?: number; balance_dollars?: string; balance_breakdown?: { exchange_index?: number; balance?: number; balance_dollars?: string }[] }>("GET", "/portfolio/balance");
     const total = d.balance_dollars !== undefined ? Number(d.balance_dollars) : (d.balance ?? 0) / 100;
-    let byIndex: Record<number, number> | null = null;
-    if (Array.isArray(d.balance_breakdown) && d.balance_breakdown.length) {
-      byIndex = {};
-      for (const b of d.balance_breakdown) {
-        const v = b.balance_dollars !== undefined ? Number(b.balance_dollars) : Number(b.balance ?? 0) / 100;
-        byIndex[Number(b.exchange_index ?? 0)] = (byIndex[Number(b.exchange_index ?? 0)] ?? 0) + v;
-      }
-    }
-    return { total, byIndex };
+    return { total, byIndex: parseBreakdown(d.balance_breakdown, total) };
   }
 
   /**
