@@ -205,6 +205,17 @@ export class KalshiClient {
     return this.getMarkets({ tickers: tickers.join(","), limit: Math.min(1000, tickers.length) });
   }
 
+  /** Open events of a series with their markets nested. */
+  async getEventsWithMarkets(seriesTicker: string): Promise<(KalshiEvent & { markets?: Market[] })[]> {
+    const d = await this.request<{ events?: (KalshiEvent & { markets?: Market[] })[] }>("GET", "/events", {
+      series_ticker: seriesTicker,
+      status: "open",
+      with_nested_markets: "true",
+      limit: 200,
+    });
+    return d.events ?? [];
+  }
+
   async getMarket(ticker: string): Promise<Market> {
     return (await this.request<{ market: Market }>("GET", `/markets/${ticker}`)).market;
   }

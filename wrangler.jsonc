@@ -38,6 +38,14 @@
     "MODEL_WEIGHT": "0.5",          // blend: 1 = trust the crypto model fully, 0.5 = halfway to the market price
     "MIN_SECONDS_LEFT": "120",
 
+    // Sports: Kalshi game prices vs sportsbook odds (needs the ODDS_API_KEY secret from the-odds-api.com)
+    "SPORTS_ENABLED": "true",
+    "SPORTS_LIST": "baseball_mlb,americanfootball_nfl,americanfootball_ncaaf,basketball_nba,icehockey_nhl",
+    "SPORTS_MIN_EDGE": "0.03",
+    "SPORTS_INTERVAL_MINUTES": "30",
+    "SPORTS_REGIONS": "eu,us",      // eu includes Pinnacle; each region costs 1 credit per sport per check
+    "SPORTS_DAILY_CREDITS": "16",   // ~480/month, fits the free plan; raise if you buy a bigger plan
+
     // AI forecaster for slower, non-crypto markets (needs the ANTHROPIC_API_KEY secret)
     "AI_ENABLED": "true",
     "AI_MODEL": "claude-sonnet-5-5",

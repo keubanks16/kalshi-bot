@@ -84,6 +84,13 @@ export default {
       return homeMsg(problem ?? (mode === "live" ? "LIVE: the bot now trades real money." : "Back to paper trading."));
     }
 
+    if (req.method === "POST" && url.pathname === "/strategy") {
+      if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+      const form = await req.formData();
+      await stub.setStrategy(String(form.get("key") ?? ""), form.get("on") === "on");
+      return home();
+    }
+
     if (req.method === "POST" && (url.pathname === "/prices" || url.pathname === "/fresh-test")) {
       if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
       const form = await req.formData();

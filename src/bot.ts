@@ -3,7 +3,7 @@
 // schedules the next. A once-a-minute cron makes sure the alarm is running.
 
 import { DurableObject } from "cloudflare:workers";
-import { HORIZONS, LIMIT_FIELDS, baseUrl, cleanLimits, cleanPriceRange, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
+import { HORIZONS, LIMIT_FIELDS, STRATEGY_SWITCHES, baseUrl, cleanLimits, cleanPriceRange, cleanSwitches, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
 import { Engine, tradingDay } from "./engine.ts";
 import { KalshiClient, importPrivateKey } from "./kalshi.ts";
 import { PriceFeed } from "./prices.ts";
@@ -19,6 +19,16 @@ export interface Snapshot {
   testSince?: number; // stats count trades from here (0 = all history)
   showingAll?: boolean;
   priceRange?: { min: number; max: number; dfltMin: number; dfltMax: number };
+  switches?: { key: string; label: string; on: boolean }[];
+  sports?: {
+    on: boolean;
+    status: string;
+    creditsToday: number;
+    creditBudget: number;
+    remaining: number | null;
+    games: { game: string; start: string; books: string; kalshi: string; action: string; source: string }[];
+    check: { settled: number; expectedWins: number; actualWins: number; avgPrice: number };
+  };
   problem: string | null;
   status: string;
   lastError: string | null;
@@ -47,7 +57,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
@@ -75,6 +85,7 @@ export class Bot extends DurableObject<Env> {
     const client = new KalshiClient(baseUrl(this.env, s), String(this.env.KALSHI_API_KEY_ID ?? ""), key);
     this.engine = new Engine(s, client, new PriceFeed(), this.store);
     this.engine.aiKey = String(this.env.ANTHROPIC_API_KEY ?? "");
+    this.engine.oddsKey = String(this.env.ODDS_API_KEY ?? "");
     this.store.set("mode", s.mode);
     return this.engine;
   }
@@ -166,8 +177,18 @@ export class Bot extends DurableObject<Env> {
       today: this.store.pnlForDay(tradingDay(now, tz), view, since),
       byStrategy: this.store.byStrategy(view, since),
       modelCheck: this.store.modelCheck(view, "crypto", since),
+      switches: STRATEGY_SWITCHES.map((f) => ({ key: f.key, label: f.label, on: this.effective()[f.key] })),
+      sports: {
+        on: !!(this.env.ODDS_API_KEY && this.effective().sportsEnabled),
+        status: e?.sportsStatus ?? (this.env.ODDS_API_KEY ? "Starting…" : "Off: add the ODDS_API_KEY secret (the-odds-api.com)."),
+        creditsToday: Number(this.store.get(`odds_credits_${tradingDay(now, tz)}`) ?? 0),
+        creditBudget: this.settings.sportsDailyCredits,
+        remaining: e?.oddsRemaining ?? null,
+        games: e?.sportsView ?? [],
+        check: this.store.modelCheck(view, "sports", since),
+      },
       ai: {
-        on: !!(this.env.ANTHROPIC_API_KEY && (e?.s.aiEnabled ?? this.settings.aiEnabled)),
+        on: !!(this.env.ANTHROPIC_API_KEY && this.effective().aiEnabled),
         status: e?.aiStatus ?? (this.env.ANTHROPIC_API_KEY ? "Starting…" : "Off: add the ANTHROPIC_API_KEY secret."),
         spentToday: this.store.aiSpend(tradingDay(now, tz)),
         budget: e?.s.aiDailyBudget ?? this.settings.aiDailyBudget,
@@ -268,6 +289,27 @@ export class Bot extends DurableObject<Env> {
 
   async startFreshTest(): Promise<void> {
     this.store.set("test_since", String(Date.now() / 1000));
+  }
+
+  /** Settings with dashboard switches applied (works before the engine exists). */
+  private effective(): Settings {
+    if (this.engine) return this.engine.s;
+    let sw = {};
+    try {
+      sw = cleanSwitches(JSON.parse(this.store.get("strategies") ?? "{}"));
+    } catch {}
+    return { ...this.settings, ...sw };
+  }
+
+  async setStrategy(key: string, on: boolean): Promise<void> {
+    if (!STRATEGY_SWITCHES.some((f) => f.key === key)) return;
+    let cur: Record<string, boolean> = {};
+    try {
+      cur = cleanSwitches(JSON.parse(this.store.get("strategies") ?? "{}")) as Record<string, boolean>;
+    } catch {}
+    cur[key] = on;
+    this.store.set("strategies", JSON.stringify(cur));
+    this.engine?.applyOverrides();
   }
 
   async setHorizon(h: string): Promise<void> {

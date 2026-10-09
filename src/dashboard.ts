@@ -7,7 +7,7 @@ const esc = (v: unknown) =>
 
 const money = (x: number) => `${x >= 0 ? "+" : "−"}$${Math.abs(x).toFixed(2)}`;
 const cls = (x: number | null) => (x === null ? "" : x >= 0 ? "up" : "down");
-const STRATEGY: Record<string, string> = { crypto: "Crypto", arb: "Arbitrage", ai: "AI" };
+const STRATEGY: Record<string, string> = { crypto: "Crypto", arb: "Arbitrage", ai: "AI", sports: "Sports" };
 
 export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwordSet: boolean }): string {
   // During a deploy the page can update before the bot does, so tolerate
@@ -179,6 +179,38 @@ ${
           : ""
       }</div>`;
 
+  const sw = s.switches ?? [];
+  const switchCard = !sw.length
+    ? ""
+    : `<div class="card"><div class="k">Strategies</div>${sw
+        .map(
+          (x) => `<div class="row2 sw"><span>${esc(x.label)}</span>${
+            opts.authed
+              ? `<form method="post" action="/strategy"><input type="hidden" name="key" value="${esc(x.key)}"><input type="hidden" name="on" value="${x.on ? "off" : "on"}"><button class="${x.on ? "pill-on" : "pill-off"}">${x.on ? "On" : "Off"}</button></form>`
+              : `<b class="${x.on ? "up" : "sub"}">${x.on ? "On" : "Off"}</b>`
+          }</div>`,
+        )
+        .join("")}<div class="sub" style="margin-top:6px">Tap to switch a strategy on or off. Open bets stay open and settle normally.</div></div>`;
+
+  const sp = s.sports;
+  const sportsCard = !sp
+    ? ""
+    : `<div class="card"><div class="k">Sports vs sportsbooks</div>
+<div>${esc(sp.status)}</div>
+<div class="sub" style="margin-top:4px">Odds credits today ${sp.creditsToday} of ${sp.creditBudget}${sp.remaining !== null ? ` · ${sp.remaining} left on your Odds API plan` : ""}${
+        sp.check.settled ? ` · Sports bets: expected ${sp.check.expectedWins.toFixed(1)} wins, got ${sp.check.actualWins} of ${sp.check.settled}` : ""
+      }</div>
+${
+  sp.games.length
+    ? `<table class="fc">${sp.games
+        .map(
+          (g) => `<tr><td class="wrap"><b>${esc(g.game)}</b> <span class="sub">${esc(date(Date.parse(g.start) / 1000))} ${esc(time(Date.parse(g.start) / 1000))}</span><br>
+${g.books ? `<span>Books: ${esc(g.books)} · Kalshi: ${esc(g.kalshi)}</span><br>` : ""}<span class="${String(g.action).startsWith("bought") ? "up" : "sub"}">${esc(g.action)}</span> <span class="sub">(${esc(g.source)})</span></td></tr>`,
+        )
+        .join("")}</table>`
+    : ""
+}</div>`;
+
   const limitsCard = opts.authed
     ? `<form method="post" action="/limits" class="limits">${s.limits
         .map(
@@ -232,6 +264,9 @@ details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px
 .views{margin-top:16px}.views a{flex:1;text-align:center;padding:9px 6px;border:1px solid var(--line);border-radius:10px;color:var(--ink);text-decoration:none;font-size:13px;font-weight:600}
 .views a.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .fc td{padding:10px 0}
+.sw{align-items:center;border-bottom:1px solid var(--line);padding:8px 0}.sw form{margin:0}
+.sw button{width:auto;padding:6px 18px;border-radius:99px;font-size:13px}
+.pill-on{background:var(--up);color:#fff}.pill-off{background:var(--bg);color:var(--mute);border:1px solid var(--line)}
 .row2{display:flex;justify-content:space-between;padding:4px 0}
 .test{font-size:14px}.test a{color:var(--accent)}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -250,6 +285,8 @@ ${s.problem ? `<div class="err">${esc(s.problem)}</div>` : ""}
 ${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
 
 ${modeCard}
+
+${switchCard}
 
 <div class="card"><div class="k">Only trade markets that close</div>${horizonPicker}</div>
 
@@ -270,6 +307,7 @@ ${viewSwitch}
 ${strat ? `<div class="strat">${strat}</div>` : ""}
 ${check}
 ${aiCard}
+${sportsCard}
 
 ${
   opts.authed

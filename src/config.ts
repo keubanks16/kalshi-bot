@@ -8,6 +8,7 @@ export interface Env {
   KALSHI_PRIVATE_KEY?: string; // the whole PEM file, pasted as-is
   DASHBOARD_PASSWORD?: string;
   ANTHROPIC_API_KEY?: string; // enables the AI forecaster
+  ODDS_API_KEY?: string; // enables sports (the-odds-api.com)
   // plain settings (strings from wrangler.jsonc "vars")
   [key: string]: unknown;
 }
@@ -55,6 +56,15 @@ export interface Settings {
   kellyFraction: number;
   takerFeeRate: number;
   modelWeight: number; // 0..1, how much to trust our own estimates vs the market price
+
+  // Sports: Kalshi game prices vs sportsbook consensus
+  sportsEnabled: boolean;
+  sportsList: string[]; // The Odds API sport keys
+  sportsMinEdge: number;
+  sportsIntervalMinutes: number;
+  sportsRegions: string; // sportsbook regions; each costs 1 credit per sport per check
+  sportsDailyCredits: number; // Odds API credits the bot may use per day
+  sportsMinMinutesBeforeStart: number;
 
   // AI forecaster (slower, non-crypto markets)
   aiEnabled: boolean;
@@ -121,6 +131,17 @@ export function loadSettings(env: Env): Settings {
     kellyFraction: num(env, "KELLY_FRACTION", 0.25),
     takerFeeRate: num(env, "TAKER_FEE_RATE", 0.07),
     modelWeight: num(env, "MODEL_WEIGHT", 0.5),
+
+    sportsEnabled: bool(env, "SPORTS_ENABLED", true),
+    sportsList: str(env, "SPORTS_LIST", "baseball_mlb,americanfootball_nfl,americanfootball_ncaaf,basketball_nba,icehockey_nhl")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean),
+    sportsMinEdge: num(env, "SPORTS_MIN_EDGE", 0.03),
+    sportsIntervalMinutes: num(env, "SPORTS_INTERVAL_MINUTES", 30),
+    sportsRegions: str(env, "SPORTS_REGIONS", "eu,us"),
+    sportsDailyCredits: num(env, "SPORTS_DAILY_CREDITS", 16),
+    sportsMinMinutesBeforeStart: num(env, "SPORTS_MIN_MINUTES_BEFORE_START", 5),
 
     aiEnabled: bool(env, "AI_ENABLED", true),
     aiModel: str(env, "AI_MODEL", "claude-sonnet-5-5"),
@@ -207,4 +228,21 @@ export function cleanPriceRange(raw: unknown): { minPrice: number; maxPrice: num
   const min = Number(r.minPrice);
   const max = Number(r.maxPrice);
   return min >= 0.01 && max <= 0.99 && min < max ? { minPrice: min, maxPrice: max } : null;
+}
+
+/** Strategy on/off switches saved from the dashboard. */
+export const STRATEGY_SWITCHES = [
+  { key: "cryptoEnabled", label: "Crypto" },
+  { key: "aiEnabled", label: "AI forecaster" },
+  { key: "sportsEnabled", label: "Sports" },
+  { key: "arbEnabled", label: "Arbitrage" },
+] as const;
+
+export type SwitchKey = (typeof STRATEGY_SWITCHES)[number]["key"];
+
+export function cleanSwitches(raw: unknown): Partial<Record<SwitchKey, boolean>> {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const out: Partial<Record<SwitchKey, boolean>> = {};
+  for (const f of STRATEGY_SWITCHES) if (typeof r[f.key] === "boolean") out[f.key] = r[f.key] as boolean;
+  return out;
 }

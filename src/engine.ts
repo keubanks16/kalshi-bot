@@ -7,12 +7,13 @@
 // Work per tick is capped so it fits Cloudflare's per-invocation subrequest
 // limit; the full market list is covered over several ticks.
 
-import { HORIZONS, cleanLimits, cleanPriceRange, placesOrders, type Settings } from "./config.ts";
+import { HORIZONS, cleanLimits, cleanPriceRange, cleanSwitches, placesOrders, type Settings } from "./config.ts";
 import { KalshiClient, KalshiError, askSize, dollars, seriesOf, ts, type Market } from "./kalshi.ts";
 import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
 import type { PriceFeed } from "./prices.ts";
 import type { Store } from "./store.ts";
 import { AiError, forecast as aiForecast, type Forecast } from "./ai.ts";
+import { SPORTS, fairOdds, fetchOdds, matchGame, tickerDate, easternTickerDate, type OddsResult } from "./sports.ts";
 
 const MAX_EVENT_LOOKUPS_PER_TICK = 5;
 const EVENT_CACHE_SECONDS = 3600;
@@ -29,7 +30,7 @@ interface SeriesState {
 }
 
 interface BuyOrder {
-  strategy: "crypto" | "arb" | "ai";
+  strategy: "crypto" | "arb" | "ai" | "sports";
   market: Market;
   side: "yes" | "no";
   contracts: number;
@@ -53,6 +54,13 @@ export class Engine {
 
   // in-memory state (rebuilt automatically if the object restarts)
   series = new Map<string, SeriesState>();
+  // Sports state
+  oddsKey = "";
+  sportsStatus = "starting";
+  lastSportsAt = 0;
+  oddsRemaining: number | null = null;
+  sportsView: { game: string; start: string; books: string; kalshi: string; action: string; source: string }[] = [];
+  oddsFetchFn: (key: string, sport: string, regions: string) => Promise<OddsResult> = (k, sp, r) => fetchOdds(k, sp, r);
   // AI forecaster state
   aiKey = "";
   aiCandidates = new Map<string, Market>();
@@ -114,7 +122,11 @@ export class Engine {
     try {
       range = cleanPriceRange(JSON.parse(this.store.get("price_range") ?? "null"));
     } catch {}
-    this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride, ...(range ?? {}) };
+    let switches = {};
+    try {
+      switches = cleanSwitches(JSON.parse(this.store.get("strategies") ?? "{}"));
+    } catch {}
+    this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride, ...(range ?? {}), ...switches };
     if (prevMode && prevMode !== this.s.mode) this.bankrollCache = null;
   }
 
@@ -170,12 +182,16 @@ export class Engine {
     if (this.s.cryptoEnabled && this.s.liveStreams) {
       this.phase = "connecting price streams";
       await this.feed.ensureStreams?.(this.s.cryptoAssets);
+    } else if (this.feed.sockets?.size) {
+      this.feed.closeStreams();
     }
     const maxClose = this.maxClose(now);
     this.phase = "scanning markets";
     await this.scanPage(now, maxClose);
     this.phase = "pricing crypto";
     if (this.s.cryptoEnabled) await this.runCrypto(now, maxClose);
+    this.phase = "checking sports";
+    await this.runSports(now, maxClose);
 
     const label = HORIZONS[this.horizon()].label.toLowerCase();
     this.status =
@@ -370,6 +386,117 @@ export class Engine {
     }
   }
 
+  // ------------------------------------------------------------------ sports
+  async runSports(now: number, maxClose: number | null): Promise<void> {
+    if (!this.s.sportsEnabled) return void (this.sportsStatus = "Off.");
+    if (!this.oddsKey) return void (this.sportsStatus = "Off: add the ODDS_API_KEY secret (the-odds-api.com).");
+    if (now - this.lastSportsAt < this.s.sportsIntervalMinutes * 60) return;
+    this.lastSportsAt = now;
+
+    const day = tradingDay(now, this.s.timezone);
+    const creditKey = `odds_credits_${day}`;
+    let used = Number(this.store.get(creditKey) ?? 0);
+    const perCall = this.s.sportsRegions.split(",").filter(Boolean).length;
+    const bankroll = await this.bankroll();
+    const latestStart = maxClose ?? now + 7 * 86400;
+    const view: typeof this.sportsView = [];
+    let checked = 0;
+    let traded = 0;
+    let budgetHit = false;
+    let oddsError = "";
+
+    for (const sportKey of this.s.sportsList) {
+      const sport = SPORTS[sportKey];
+      if (!sport) continue;
+      // Kalshi first (free): skip the paid odds call if there are no open games.
+      let events: Awaited<ReturnType<KalshiClient["getEventsWithMarkets"]>>;
+      try {
+        events = (await this.client.getEventsWithMarkets(sport.series)).filter((e) => (e.markets ?? []).some((m) => !m.status || m.status === "active"));
+      } catch (e) {
+        if (e instanceof KalshiError && e.status === 429) throw e; // let the round back off
+        continue;
+      }
+      if (!events.length) continue;
+      if (used + perCall > this.s.sportsDailyCredits) {
+        budgetHit = true;
+        break;
+      }
+      let odds: OddsResult;
+      try {
+        odds = await this.oddsFetchFn(this.oddsKey, sportKey, this.s.sportsRegions);
+      } catch (e) {
+        oddsError = (e as Error).message;
+        continue;
+      }
+      used += odds.cost;
+      this.store.set(creditKey, String(used));
+      if (odds.remaining !== null) this.oddsRemaining = odds.remaining;
+
+      for (const game of odds.games) {
+        const start = Date.parse(game.commence_time) / 1000;
+        // Pre-game only, and inside your time limit.
+        if (start - now < this.s.sportsMinMinutesBeforeStart * 60 || start > latestStart) continue;
+        const ev = events.find((e) => tickerDate(e.event_ticker) === easternTickerDate(game.commence_time) && matchGame(game, (e.markets ?? []) as any));
+        if (!ev) continue;
+        const map = matchGame(game, (ev.markets ?? []) as any)!;
+        const fair = fairOdds(game, now * 1000);
+        if (!fair) continue;
+        checked++;
+        const label = `${game.away_team} @ ${game.home_team}`;
+        const startLabel = new Date(start * 1000).toISOString();
+
+        if ((ev.markets ?? []).some((m) => this.store.openSides(m.ticker, this.s.mode).length)) {
+          view.push({ game: label, start: startLabel, books: "", kalshi: "", action: "already holding a position", source: fair.source });
+          continue;
+        }
+        // Best single bet in this game (YES or NO on any team).
+        let best: { m: Market; d: ReturnType<typeof decideBinary>; p: number; outcome: string } | null = null;
+        for (const m of ev.markets ?? []) {
+          const outcome = map.get(m.ticker);
+          const p = outcome ? fair.probs[outcome] : undefined;
+          if (p === undefined) continue;
+          const d = decideBinary(p, dollars(m, "yes_ask"), dollars(m, "no_ask"), bankroll, { ...this.s, minEdge: this.s.sportsMinEdge });
+          if (!best || d.edge > best.d.edge) best = { m, d, p, outcome: outcome! };
+        }
+        if (!best) continue;
+        const books = `${best.outcome} ${(best.p * 100).toFixed(0)}%`;
+        const mid = (() => {
+          const b = dollars(best.m, "yes_bid");
+          const a = dollars(best.m, "yes_ask");
+          return b !== null && a !== null ? `${(((a + b) / 2) * 100).toFixed(0)}¢` : "—";
+        })();
+        let action = `no bet: ${best.d.reason}`;
+        const side = sideOf(best.d);
+        if (side && best.d.price !== undefined) {
+          const filled = await this.buy({
+            strategy: "sports",
+            market: best.m,
+            side,
+            contracts: best.d.contracts,
+            price: best.d.price,
+            pFair: side === "yes" ? best.p : 1 - best.p,
+            edge: best.d.edge,
+            note: `${label}: ${fair.source} says ${books}`,
+          });
+          if (filled) {
+            traded++;
+            action = `bought ${filled} ${side.toUpperCase()} @ $${best.d.price.toFixed(2)} (edge ${fmtEdge(best.d.edge)})`;
+            this.store.addDecision({ ts: now, strategy: "sports", ticker: best.m.ticker, action: best.d.action, reason: `${label} — books ${books}, Kalshi ${mid}: ${action}`, p_fair: best.p, price: best.d.price });
+          } else action = `edge ${fmtEdge(best.d.edge)} but blocked by limits`;
+        }
+        view.push({ game: label, start: startLabel, books, kalshi: `${best.outcome} ${mid}`, action, source: fair.source });
+      }
+    }
+    this.sportsView = view.slice(0, 12);
+    this.sportsStatus = budgetHit
+      ? `Daily odds budget used (${used} of ${this.s.sportsDailyCredits} credits). Resumes tomorrow.`
+      : oddsError && !checked
+        ? `Odds error: ${oddsError}`
+        : checked
+          ? `Compared ${checked} upcoming game${checked > 1 ? "s" : ""} with the sportsbooks${traded ? `, bought ${traded}` : ""}. Next check in ${this.s.sportsIntervalMinutes} min.`
+          : "No upcoming games inside your time limit match Kalshi right now.";
+  }
+
   // ----------------------------------------------------------- AI forecaster
   isCryptoSeries(series: string): boolean {
     return this.s.cryptoAssets.some((a) => series.startsWith(`KX${a}`));
@@ -395,7 +522,7 @@ export class Engine {
 
   /** At most one forecast per call; the Durable Object runs this in the background. */
   async runAi(now: number): Promise<void> {
-    if (!this.s.aiEnabled) return void (this.aiStatus = "Off (AI_ENABLED is false).");
+    if (!this.s.aiEnabled) return void (this.aiStatus = "Off.");
     if (!this.aiKey) return void (this.aiStatus = "Off: add the ANTHROPIC_API_KEY secret.");
     if (this.store.killSwitchOn()) return void (this.aiStatus = "Paused by the kill switch.");
     if (now - this.lastAiAt < this.s.aiIntervalMinutes * 60) return;
