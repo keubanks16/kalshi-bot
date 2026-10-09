@@ -824,3 +824,24 @@ test("dashboard shows Kalshi cash while something is live", async () => {
   );
   assert.ok(html.includes("Kalshi cash available to the bot: <b>$59.73</b>"));
 });
+
+test("live bets only count the cash on their market's exchange shard", async () => {
+  // $59.10 in total, but only $0.30 on shard #1 where this market trades
+  const a = liveMaker();
+  (a.client as any).getBalanceDetail = async () => ({ total: 59.1, byIndex: { 0: 58.8, 1: 0.3 } });
+  a.client.all[0].exchange_index = 1;
+  await a.again();
+  assert.equal(a.calls.filter((c) => c.startsWith("post")).length, 0);
+  assert.match(
+    a.store.recentDecisions(5).map((d: any) => d.reason).join(" | "),
+    /not enough cash in Kalshi on this market's exchange shard #1 \(\$0\.30 available/,
+  );
+  assert.deepEqual(a.engine.kalshiCash?.byIndex, { 0: 58.8, 1: 0.3 });
+
+  // same money, but the market is on the shard that holds it: the bet goes through
+  const b = liveMaker();
+  (b.client as any).getBalanceDetail = async () => ({ total: 59.1, byIndex: { 0: 58.8, 1: 0.3 } });
+  b.client.all[0].exchange_index = 0;
+  await b.again();
+  assert.equal(b.calls.filter((c) => c.startsWith("post")).length, 1);
+});

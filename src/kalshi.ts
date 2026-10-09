@@ -262,6 +262,25 @@ export class KalshiClient {
     return d.event;
   }
 
+  /**
+   * Available cash in dollars, in total and per exchange shard. Kalshi's total
+   * adds up every shard, but an order can only spend the cash on its own
+   * market's shard (the market's exchange_index).
+   */
+  async getBalanceDetail(): Promise<{ total: number; byIndex: Record<number, number> | null }> {
+    const d = await this.request<{ balance?: number; balance_dollars?: string; balance_breakdown?: { exchange_index?: number; balance?: number; balance_dollars?: string }[] }>("GET", "/portfolio/balance");
+    const total = d.balance_dollars !== undefined ? Number(d.balance_dollars) : (d.balance ?? 0) / 100;
+    let byIndex: Record<number, number> | null = null;
+    if (Array.isArray(d.balance_breakdown) && d.balance_breakdown.length) {
+      byIndex = {};
+      for (const b of d.balance_breakdown) {
+        const v = b.balance_dollars !== undefined ? Number(b.balance_dollars) : Number(b.balance ?? 0) / 100;
+        byIndex[Number(b.exchange_index ?? 0)] = (byIndex[Number(b.exchange_index ?? 0)] ?? 0) + v;
+      }
+    }
+    return { total, byIndex };
+  }
+
   async getBalance(): Promise<number> {
     const d = await this.request<{ balance?: number; balance_dollars?: string }>("GET", "/portfolio/balance");
     if (d.balance_dollars !== undefined) return Number(d.balance_dollars);

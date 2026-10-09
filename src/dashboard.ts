@@ -244,6 +244,12 @@ ${
   s.kalshiCash
     ? `<div class="sub" style="margin-top:8px">Kalshi cash available to the bot: <b>${s.kalshiCash.value === null ? "not read yet" : `$${s.kalshiCash.value.toFixed(2)}`}</b>${
         s.kalshiCash.at ? ` (checked ${esc(time(s.kalshiCash.at))})` : ""
+      }${
+        s.kalshiCash.byIndex && Object.keys(s.kalshiCash.byIndex).length > 1
+          ? `<br>Split by exchange shard: ${Object.entries(s.kalshiCash.byIndex)
+              .map(([i, v]) => `#${esc(i)} $${Number(v).toFixed(2)}`)
+              .join(" · ")}. A bet can only use the cash on its own market's shard.`
+          : ""
       }${s.kalshiCash.error ? ` · couldn't read it: ${esc(s.kalshiCash.error)}` : ""}</div>`
     : ""
 }

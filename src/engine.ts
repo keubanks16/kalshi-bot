@@ -721,32 +721,40 @@ export class Engine {
   }
 
   /** Available cash in the Kalshi account as of the last check (live only), for the dashboard. */
-  kalshiCash: { value: number; at: number } | null = null;
+  kalshiCash: { value: number; at: number; byIndex?: Record<number, number> | null } | null = null;
   kalshiCashError: string | null = null;
   private cashStale = false;
 
   /** Available Kalshi cash, re-read at most every 20s and right after any order. Null if it can't be read. */
-  async availableCash(): Promise<number | null> {
+  async availableCash(m?: Market): Promise<number | null> {
     const now = this.clock();
-    if (this.kalshiCash && !this.cashStale && now - this.kalshiCash.at < 20) return this.kalshiCash.value;
-    try {
-      this.kalshiCash = { value: await this.client.getBalance(), at: now };
-      this.cashStale = false;
-      this.kalshiCashError = null;
-      return this.kalshiCash.value;
-    } catch (e) {
-      if (e instanceof KalshiError && e.status === 429) throw e;
-      this.kalshiCashError = (e as Error)?.message ?? String(e);
-      return null;
+    if (!this.kalshiCash || this.cashStale || now - this.kalshiCash.at >= 20) {
+      try {
+        const c = this.client.getBalanceDetail ? await this.client.getBalanceDetail() : { total: await this.client.getBalance(), byIndex: null };
+        this.kalshiCash = { value: c.total, at: now, byIndex: c.byIndex };
+        this.cashStale = false;
+        this.kalshiCashError = null;
+      } catch (e) {
+        if (e instanceof KalshiError && e.status === 429) throw e;
+        this.kalshiCashError = (e as Error)?.message ?? String(e);
+        return null;
+      }
     }
+    // An order can only spend the cash on its own market's exchange shard.
+    const by = this.kalshiCash.byIndex;
+    const idx = m?.exchange_index as unknown;
+    if (m && by && idx !== undefined && idx !== null && idx !== "") return by[Number(idx)] ?? 0;
+    return this.kalshiCash.value;
   }
 
+
   /** Shrink a live order to the cash Kalshi has available; 0 (with a reason) if not even one contract fits. */
-  private async fitToCash(contracts: number, price: number, feeRate: number): Promise<number> {
-    const cash = await this.availableCash();
+  private async fitToCash(contracts: number, price: number, feeRate: number, m?: Market): Promise<number> {
+    const cash = await this.availableCash(m);
     if (cash === null) return contracts; // can't tell; let Kalshi decide
     const fit = fitToRoom(contracts, price, cash, feeRate);
-    if (fit < 1) this.skipWhy = `not enough cash in Kalshi ($${cash.toFixed(2)} available, 1 contract costs about $${(price + takerFee(1, price, feeRate)).toFixed(2)})`;
+    const shard = m && this.kalshiCash?.byIndex && m.exchange_index !== undefined && m.exchange_index !== null ? ` on this market's exchange shard #${Number(m.exchange_index)}` : "";
+    if (fit < 1) this.skipWhy = `not enough cash in Kalshi${shard} ($${cash.toFixed(2)} available, 1 contract costs about $${(price + takerFee(1, price, feeRate)).toFixed(2)})`;
     return fit;
   }
 
@@ -791,7 +799,7 @@ export class Engine {
     let contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.makerFeeRate);
     if (contracts < 1) return (this.skipWhy = this.blockedBy(m.event_ticker, m.ticker, mode, o.price)), none;
     if (mode !== "paper") {
-      const fit = await this.fitToCash(contracts, o.price, this.s.makerFeeRate);
+      const fit = await this.fitToCash(contracts, o.price, this.s.makerFeeRate, m);
       if (fit < 1) return none;
       contracts = fit;
     }
@@ -1041,7 +1049,7 @@ export class Engine {
     let contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.takerFeeRate);
     if (contracts < 1) return (this.skipWhy = this.blockedBy(m.event_ticker, m.ticker, mode, o.price)), 0;
     if (mode !== "paper") {
-      const fit = await this.fitToCash(contracts, o.price, this.s.takerFeeRate);
+      const fit = await this.fitToCash(contracts, o.price, this.s.takerFeeRate, m);
       if (fit < 1) return 0;
       contracts = fit;
     }

@@ -18,7 +18,7 @@ export interface Snapshot {
   canGoLive?: boolean;
   keysSet?: boolean;
   /** Available cash in Kalshi as the bot last read it (only while something trades live). */
-  kalshiCash?: { value: number | null; at: number | null; error: string | null } | null;
+  kalshiCash?: { value: number | null; at: number | null; error: string | null; byIndex?: Record<number, number> | null } | null;
   message?: string | null;
   testSince?: number; // stats count trades from here (0 = all history)
   showingAll?: boolean;
@@ -237,7 +237,7 @@ export class Bot extends DurableObject<Env> {
       problem: this.problem,
       status: this.problem ? "Not running — fix the setting below" : e?.status ?? (this.startError ? "Not running — can't start (see error)" : "Starting up…"),
       lastError: e?.lastError ?? this.startError,
-      kalshiCash: anyReal ? { value: e?.kalshiCash?.value ?? null, at: e?.kalshiCash?.at ?? null, error: e?.kalshiCashError ?? null } : null,
+      kalshiCash: anyReal ? { value: e?.kalshiCash?.value ?? null, at: e?.kalshiCash?.at ?? null, error: e?.kalshiCashError ?? null, byIndex: e?.kalshiCash?.byIndex ?? null } : null,
       alive: !!e && now - e.heartbeat < Math.max(60, this.settings.pollSeconds * 6),
       killSwitch: this.store.killSwitchOn(),
       horizon,
