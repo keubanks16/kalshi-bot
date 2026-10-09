@@ -3,7 +3,7 @@
 // schedules the next. A once-a-minute cron makes sure the alarm is running.
 
 import { DurableObject } from "cloudflare:workers";
-import { HORIZONS, baseUrl, loadSettings, placesOrders, validate, type Env, type Settings } from "./config.ts";
+import { HORIZONS, LIMIT_FIELDS, baseUrl, cleanLimits, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
 import { Engine, tradingDay } from "./engine.ts";
 import { KalshiClient, importPrivateKey } from "./kalshi.ts";
 import { PriceFeed } from "./prices.ts";
@@ -17,7 +17,8 @@ export interface Snapshot {
   alive: boolean;
   killSwitch: boolean;
   horizon: string;
-  horizons: { key: string; label: string }[];
+  horizons: { key: string; label: string; short: string }[];
+  limits: { key: string; label: string; help: string; value: number; dflt: number }[];
   summary: ReturnType<Store["summary"]>;
   today: number;
   byStrategy: { strategy: string; trades: number; pnl: number }[];
@@ -27,7 +28,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.3.3";
+export const VERSION = "0.4.0";
 
 export class Bot extends DurableObject<Env> {
   store: Store;
@@ -99,7 +100,8 @@ export class Bot extends DurableObject<Env> {
       alive: !!e && now - e.heartbeat < Math.max(60, this.settings.pollSeconds * 6),
       killSwitch: this.store.killSwitchOn(),
       horizon,
-      horizons: Object.entries(HORIZONS).map(([key, h]) => ({ key, label: h.label })),
+      horizons: Object.entries(HORIZONS).map(([key, h]) => ({ key, label: h.label, short: h.short })),
+      limits: this.limitRows(),
       summary: this.store.summary(),
       today: this.store.pnlForDay(tradingDay(now, tz)),
       byStrategy: this.store.byStrategy(),
@@ -126,6 +128,31 @@ export class Bot extends DurableObject<Env> {
 
   async setKillSwitch(on: boolean): Promise<void> {
     this.store.set("kill_switch", on ? "on" : "off");
+  }
+
+  private savedLimits(): Partial<Limits> {
+    try {
+      return cleanLimits(JSON.parse(this.store.get("limits") ?? "{}"));
+    } catch {
+      return {};
+    }
+  }
+
+  private limitRows() {
+    const dflt = limitsOf(this.settings);
+    const current = { ...dflt, ...this.savedLimits() };
+    return LIMIT_FIELDS.map((f) => ({ key: f.key, label: f.label, help: f.help, value: current[f.key], dflt: dflt[f.key] }));
+  }
+
+  /** Save spending limits from the dashboard; blank or invalid fields keep their current value. */
+  async setLimits(raw: Record<string, unknown>): Promise<void> {
+    this.store.set("limits", JSON.stringify({ ...this.savedLimits(), ...cleanLimits(raw) }));
+    this.engine?.applyOverrides();
+  }
+
+  async resetLimits(): Promise<void> {
+    this.store.set("limits", "{}");
+    this.engine?.applyOverrides();
   }
 
   async setHorizon(h: string): Promise<void> {

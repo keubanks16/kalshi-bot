@@ -117,7 +117,7 @@ class FakeFeed {
 }
 
 function setup(vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ...vars });
   const store = new Store(memorySql());
   const client = new FakeClient();
   const engine = new Engine(s, client as any, new FakeFeed() as any, store, () => NOW);
@@ -182,6 +182,23 @@ test("backs off when Kalshi says too many requests", async () => {
   assert.match(engine.status, /slow down/);
 });
 
+test("15-minute limit skips markets closing later", async () => {
+  const { engine, store } = setup();
+  store.set("horizon", "15m");
+  await engine.tick();
+  assert.equal(store.openTrades().length, 0);
+});
+
+test("dashboard spending limits override the defaults", async () => {
+  const { engine, store } = setup({ ARB_ENABLED: "false" });
+  store.set("limits", JSON.stringify({ maxCostPerOrder: 2, bogus: 9, maxOpenRisk: -5 }));
+  await engine.tick();
+  assert.equal(engine.s.maxCostPerOrder, 2);
+  assert.equal(engine.s.maxOpenRisk, 50); // invalid value ignored
+  const t = store.openTrades()[0];
+  assert.ok(t.cost <= 2, `cost ${t.cost}`);
+});
+
 test("kill switch stops trading", async () => {
   const { engine, store } = setup();
   store.set("kill_switch", "on");
@@ -210,7 +227,8 @@ test("dashboard renders and escapes Kalshi text", async () => {
   const html = renderDashboard(
     {
       mode: "paper", problem: null, status: engine.status, lastError: null, alive: true, killSwitch: false,
-      horizon: "day", horizons: [{ key: "day", label: "Within a day" }], summary: store.summary(), today: 0,
+      horizon: "day", horizons: [{ key: "day", label: "Within a day", short: "1 day" }],
+      limits: [{ key: "maxCostPerOrder", label: "Max per trade", help: "h", value: 5, dflt: 5 }], summary: store.summary(), today: 0,
       byStrategy: store.byStrategy(), trades: store.recentTrades(), decisions: store.recentDecisions(), timezone: "America/New_York", diag: {},
     },
     { authed: true, passwordSet: true },

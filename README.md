@@ -29,6 +29,7 @@ On the dashboard you choose how soon a market must close for the bot to trade it
 
 | Setting | Trades markets closing… |
 |---|---|
+| 15 min | within 15 minutes (the 15-minute crypto markets) |
 | 1 hour | within the next hour |
 | 1 day | within 24 hours (default) |
 | 1 week | within 7 days |
@@ -39,8 +40,11 @@ A shorter limit means your money comes back sooner. Changing the limit applies o
 
 ## Safety
 
+The dollar limits below can be changed any time from the dashboard's **Spending limits** card (sign in first). Changes apply on the next round, and **Reset to defaults** goes back to the values in `wrangler.jsonc`.
+
 | Guard | Default |
 |---|---|
+| Max per trade | $5 |
 | Mode | `paper`. Live needs `BOT_MODE=live` **and** `LIVE_TRADING_CONFIRM=yes` |
 | Max contracts per order | 10 |
 | Max spent per market | $10 |

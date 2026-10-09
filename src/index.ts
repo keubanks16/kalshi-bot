@@ -67,11 +67,13 @@ export default {
       return home({ "Set-Cookie": `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
     }
 
-    if (req.method === "POST" && (url.pathname === "/kill" || url.pathname === "/horizon")) {
+    if (req.method === "POST" && ["/kill", "/horizon", "/limits"].includes(url.pathname)) {
       if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
       const form = await req.formData();
       if (url.pathname === "/kill") await stub.setKillSwitch(form.get("on") === "on");
-      else await stub.setHorizon(String(form.get("horizon") ?? ""));
+      else if (url.pathname === "/horizon") await stub.setHorizon(String(form.get("horizon") ?? ""));
+      else if (form.get("reset") === "1") await stub.resetLimits();
+      else await stub.setLimits(Object.fromEntries([...form.entries()].map(([k, v]) => [k, String(v)])));
       return home();
     }
 

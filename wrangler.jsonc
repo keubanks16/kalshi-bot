@@ -20,7 +20,7 @@
   "vars": {
     "BOT_MODE": "paper",            // paper | demo | live
     "LIVE_TRADING_CONFIRM": "",     // must be "yes" for live
-    "TRADE_HORIZON": "day",         // starting time limit: hour | day | week | month | any
+    "TRADE_HORIZON": "day",         // starting time limit: 15m | hour | day | week | month | any
     "BOT_TIMEZONE": "America/New_York",
     "POLL_SECONDS": "10",
 
@@ -35,8 +35,10 @@
     "MIN_SECONDS_LEFT": "120",
     "MIN_SECONDS_ELAPSED": "60",
 
+    // Starting spending limits in dollars. Change them any time on the dashboard.
     "BANKROLL": "100",
     "MAX_CONTRACTS_PER_ORDER": "10",
+    "MAX_COST_PER_ORDER": "5",
     "MAX_COST_PER_MARKET": "10",
     "MAX_COST_PER_EVENT": "20",
     "MAX_OPEN_RISK": "50",

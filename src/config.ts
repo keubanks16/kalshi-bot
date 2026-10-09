@@ -17,12 +17,13 @@ export const BASE_URLS = {
 } as const;
 
 /** How far out a market may close for the bot to trade it. */
-export const HORIZONS: Record<string, { label: string; seconds: number | null }> = {
-  hour: { label: "Within an hour", seconds: 3600 },
-  day: { label: "Within a day", seconds: 86400 },
-  week: { label: "Within a week", seconds: 7 * 86400 },
-  month: { label: "Within a month", seconds: 31 * 86400 },
-  any: { label: "Any time", seconds: null },
+export const HORIZONS: Record<string, { label: string; short: string; seconds: number | null }> = {
+  "15m": { label: "Within 15 minutes", short: "15 min", seconds: 15 * 60 },
+  hour: { label: "Within an hour", short: "1 hour", seconds: 3600 },
+  day: { label: "Within a day", short: "1 day", seconds: 86400 },
+  week: { label: "Within a week", short: "1 week", seconds: 7 * 86400 },
+  month: { label: "Within a month", short: "1 month", seconds: 31 * 86400 },
+  any: { label: "Any time", short: "Any", seconds: null },
 };
 
 export type Mode = "paper" | "demo" | "live";
@@ -55,6 +56,7 @@ export interface Settings {
   // risk limits
   bankroll: number;
   maxContractsPerOrder: number;
+  maxCostPerOrder: number;
   maxCostPerMarket: number;
   maxCostPerEvent: number;
   maxOpenRisk: number;
@@ -104,6 +106,7 @@ export function loadSettings(env: Env): Settings {
 
     bankroll: num(env, "BANKROLL", 100),
     maxContractsPerOrder: num(env, "MAX_CONTRACTS_PER_ORDER", 10),
+    maxCostPerOrder: num(env, "MAX_COST_PER_ORDER", 5),
     maxCostPerMarket: num(env, "MAX_COST_PER_MARKET", 10),
     maxCostPerEvent: num(env, "MAX_COST_PER_EVENT", 20),
     maxOpenRisk: num(env, "MAX_OPEN_RISK", 50),
@@ -135,4 +138,33 @@ export function validate(env: Env, s: Settings): string | null {
   if (s.pollSeconds < 5) return "POLL_SECONDS must be at least 5";
   if (!HORIZONS[s.defaultHorizon]) return `TRADE_HORIZON must be one of ${Object.keys(HORIZONS).join(", ")}`;
   return null;
+}
+
+/** Spending limits you can change from the dashboard (dollars). */
+export const LIMIT_FIELDS = [
+  { key: "bankroll", label: "Bankroll", help: "Money the bot sizes bets from" },
+  { key: "maxCostPerOrder", label: "Max per trade", help: "Most it spends on one order" },
+  { key: "maxCostPerMarket", label: "Max per market", help: "Total on any one market" },
+  { key: "maxCostPerEvent", label: "Max per event", help: "Total across related markets" },
+  { key: "maxOpenRisk", label: "Max open at once", help: "Total in trades not yet settled" },
+  { key: "maxDailyLoss", label: "Daily loss limit", help: "Stops new trades for the day after this" },
+] as const;
+
+export type LimitKey = (typeof LIMIT_FIELDS)[number]["key"];
+export type Limits = Record<LimitKey, number>;
+
+export const MAX_LIMIT = 100_000;
+
+export function limitsOf(s: Settings): Limits {
+  return Object.fromEntries(LIMIT_FIELDS.map((f) => [f.key, s[f.key]])) as Limits;
+}
+
+/** Keep only valid, positive dollar amounts. */
+export function cleanLimits(raw: Record<string, unknown>): Partial<Limits> {
+  const out: Partial<Limits> = {};
+  for (const f of LIMIT_FIELDS) {
+    const v = Number(String(raw[f.key] ?? "").replace(/[$,\s]/g, ""));
+    if (Number.isFinite(v) && v > 0 && v <= MAX_LIMIT) out[f.key] = Math.round(v * 100) / 100;
+  }
+  return out;
 }

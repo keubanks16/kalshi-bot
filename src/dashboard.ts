@@ -54,9 +54,21 @@ export function renderDashboard(s: Snapshot, opts: { authed: boolean; passwordSe
 
   const horizonPicker = opts.authed
     ? `<form method="post" action="/horizon" class="seg">${s.horizons
-        .map((h) => `<button name="horizon" value="${esc(h.key)}" class="${h.key === s.horizon ? "on" : ""}">${esc(h.label.replace("Within ", "").replace("an ", "1 ").replace("a ", "1 "))}</button>`)
+        .map((h) => `<button name="horizon" value="${esc(h.key)}" class="${h.key === s.horizon ? "on" : ""}">${esc(h.short)}</button>`)
         .join("")}</form>`
     : `<div class="v small">${esc(horizonLabel)}</div>`;
+
+  const limitsCard = opts.authed
+    ? `<form method="post" action="/limits" class="limits">${s.limits
+        .map(
+          (l) => `<label><span><b>${esc(l.label)}</b><br><span class="sub">${esc(l.help)}</span></span>
+  <span class="dollar">$<input name="${esc(l.key)}" type="number" inputmode="decimal" min="0.01" step="0.01" value="${l.value}"></span></label>`,
+        )
+        .join("")}<button class="go">Save limits</button></form>
+<form method="post" action="/limits"><input type="hidden" name="reset" value="1"><button class="link">Reset to defaults</button></form>`
+    : `<div class="limits">${s.limits
+        .map((l) => `<div class="row"><span>${esc(l.label)}</span><b>$${l.value.toFixed(2)}</b></div>`)
+        .join("")}</div>`;
 
   return `<!doctype html>
 <html lang="en"><head>
@@ -86,6 +98,10 @@ button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px;wid
 .seg{display:flex;gap:6px;flex-wrap:wrap}.seg button{flex:1;min-width:56px;padding:10px 6px;background:var(--bg);color:var(--ink);border:1px solid var(--line);font-size:13px}
 .seg button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 input{font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;width:100%;margin-bottom:8px;background:var(--card);color:var(--ink)}
+.limits label,.limits .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+.limits .dollar{display:flex;align-items:center;gap:4px;font-weight:600}
+.limits input{width:96px;margin:0;text-align:right}
+.limits button.go{margin-top:12px}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .top form{margin:0}button.link{background:none;color:var(--accent);padding:6px 0;width:auto;font-weight:600;font-size:14px}
 .strat{font-size:13px;color:var(--mute);margin-top:4px}.strat b{font-weight:600}
@@ -100,6 +116,8 @@ ${s.problem ? `<div class="err">${esc(s.problem)}</div>` : ""}
 ${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
 
 <div class="card"><div class="k">Only trade markets that close</div>${horizonPicker}</div>
+
+<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>
 
 <div class="grid">
  <div class="card"><div class="k">Total P&amp;L</div><div class="v ${cls(sum.pnl)}">${esc(money(sum.pnl))}</div></div>

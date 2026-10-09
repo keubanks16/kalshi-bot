@@ -7,7 +7,7 @@
 // Work per tick is capped so it fits Cloudflare's per-invocation subrequest
 // limit; the full market list is covered over several ticks.
 
-import { HORIZONS, placesOrders, type Settings } from "./config.ts";
+import { HORIZONS, cleanLimits, placesOrders, type Settings } from "./config.ts";
 import { KalshiClient, KalshiError, askSize, dollars, seriesOf, ts, type Market } from "./kalshi.ts";
 import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
 import type { PriceFeed } from "./prices.ts";
@@ -44,6 +44,7 @@ export function tradingDay(epochSeconds: number, timeZone: string): string {
 
 export class Engine {
   s: Settings;
+  base: Settings; // settings from wrangler.jsonc, before dashboard overrides
   client: KalshiClient;
   feed: PriceFeed;
   store: Store;
@@ -66,6 +67,7 @@ export class Engine {
   private eventLookups = 0;
 
   constructor(s: Settings, client: KalshiClient, feed: PriceFeed, store: Store, clock: () => number = () => Date.now() / 1000) {
+    this.base = s;
     this.s = s;
     this.client = client;
     this.feed = feed;
@@ -90,7 +92,17 @@ export class Engine {
   }
 
   // ------------------------------------------------------------------ tick
+  /** Spending limits saved from the dashboard override the deployed defaults. */
+  applyOverrides(): void {
+    let saved: Record<string, unknown> = {};
+    try {
+      saved = JSON.parse(this.store.get("limits") ?? "{}");
+    } catch {}
+    this.s = { ...this.base, ...cleanLimits(saved) };
+  }
+
   async tick(): Promise<void> {
+    this.applyOverrides();
     const now = this.clock();
     this.heartbeat = now;
     this.eventLookups = 0;
@@ -355,7 +367,7 @@ export class Engine {
     if (ticker) {
       const ex = this.store.marketExposure(ticker);
       if (ex.orders >= s.maxOrdersPerMarket) return 0;
-      room = Math.min(room, s.maxCostPerMarket - ex.cost);
+      room = Math.min(room, s.maxCostPerMarket - ex.cost, s.maxCostPerOrder);
     }
     return Math.max(0, room);
   }
