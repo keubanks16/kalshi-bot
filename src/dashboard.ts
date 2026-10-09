@@ -12,6 +12,14 @@ const STRATEGY: Record<string, string> = { crypto: "Crypto", arb: "Arbitrage" };
 export function renderDashboard(s: Snapshot, opts: { authed: boolean; passwordSet: boolean }): string {
   const time = (t: number) => new Date(t * 1000).toLocaleTimeString("en-US", { timeZone: s.timezone, hour: "numeric", minute: "2-digit" });
   const date = (t: number) => new Date(t * 1000).toLocaleDateString("en-US", { timeZone: s.timezone, month: "short", day: "numeric" });
+  // "today 5:30 AM", "tomorrow 5 PM" style closing times; full date further out.
+  const closes = (t: number) => {
+    const today = date(Date.now() / 1000);
+    const tomorrow = date(Date.now() / 1000 + 86400);
+    const d = date(t);
+    const day = d === today ? "today" : d === tomorrow ? "tomorrow" : d;
+    return `${day} ${time(t)}`;
+  };
   const sum = s.summary;
   const winrate = sum.settled ? `${Math.round((100 * sum.wins) / sum.settled)}%` : "—";
   const horizonLabel = s.horizons.find((h) => h.key === s.horizon)?.label ?? s.horizon;
@@ -23,7 +31,7 @@ export function renderDashboard(s: Snapshot, opts: { authed: boolean; passwordSe
   <td>${esc(date(t.ts))}<br><span class="sub">${esc(time(t.ts))}</span></td>
   <td class="wrap">${esc(t.ticker)}<br><span class="sub">${esc(STRATEGY[t.strategy] ?? t.strategy)}</span></td>
   <td>${esc(t.side.toUpperCase())} ×${t.contracts}<br><span class="sub">@ $${t.price.toFixed(2)}</span></td>
-  <td class="${cls(t.pnl)}">${t.pnl === null ? `open<br><span class="sub">closes ${t.close_ts ? esc(date(t.close_ts)) : ""}</span>` : esc(money(t.pnl))}</td>
+  <td class="${cls(t.pnl)}">${t.pnl === null ? `open<br><span class="sub">closes ${t.close_ts ? esc(closes(t.close_ts)) : ""}</span>` : esc(money(t.pnl))}</td>
 </tr>`,
         )
         .join("")
@@ -78,9 +86,13 @@ button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px;wid
 .seg{display:flex;gap:6px;flex-wrap:wrap}.seg button{flex:1;min-width:56px;padding:10px 6px;background:var(--bg);color:var(--ink);border:1px solid var(--line);font-size:13px}
 .seg button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 input{font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;width:100%;margin-bottom:8px;background:var(--card);color:var(--ink)}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.top form{margin:0}button.link{background:none;color:var(--accent);padding:6px 0;width:auto;font-weight:600;font-size:14px}
 .strat{font-size:13px;color:var(--mute);margin-top:4px}.strat b{font-weight:600}
 </style></head><body><main>
-<h1>Kalshi Bot <span class="pill ${esc(s.mode)}">${esc(s.mode.toUpperCase())}</span></h1>
+<div class="top"><h1>Kalshi Bot <span class="pill ${esc(s.mode)}">${esc(s.mode.toUpperCase())}</span></h1>${
+  opts.authed ? `<form method="post" action="/logout"><button class="link">Sign out</button></form>` : ""
+}</div>
 <div class="sub">${s.alive ? `<span class="up">● running</span>` : `<span class="down">● not running</span>`}${s.killSwitch ? ` · <span class="warn">kill switch on</span>` : ""}</div>
 
 <div class="card"><div class="k">Now</div><div>${esc(s.status)}</div>

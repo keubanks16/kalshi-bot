@@ -63,6 +63,10 @@ export default {
       return home();
     }
 
+    if (req.method === "POST" && url.pathname === "/logout") {
+      return home({ "Set-Cookie": `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
+    }
+
     if (req.method === "POST" && (url.pathname === "/kill" || url.pathname === "/horizon")) {
       if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
       const form = await req.formData();
