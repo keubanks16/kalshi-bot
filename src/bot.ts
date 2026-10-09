@@ -3,7 +3,7 @@
 // schedules the next. A once-a-minute cron makes sure the alarm is running.
 
 import { DurableObject } from "cloudflare:workers";
-import { HORIZONS, LIMIT_FIELDS, baseUrl, cleanLimits, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
+import { HORIZONS, LIMIT_FIELDS, baseUrl, cleanLimits, cleanPriceRange, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
 import { Engine, tradingDay } from "./engine.ts";
 import { KalshiClient, importPrivateKey } from "./kalshi.ts";
 import { PriceFeed } from "./prices.ts";
@@ -16,6 +16,9 @@ export interface Snapshot {
   canGoLive?: boolean;
   keysSet?: boolean;
   message?: string | null;
+  testSince?: number; // stats count trades from here (0 = all history)
+  showingAll?: boolean;
+  priceRange?: { min: number; max: number; dfltMin: number; dfltMax: number };
   problem: string | null;
   status: string;
   lastError: string | null;
@@ -44,7 +47,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.6.0";
+export const VERSION = "0.7.0";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
@@ -57,6 +60,8 @@ export class Bot extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new Store(ctx.storage.sql as unknown as Sql);
+    // First run of this version starts a fresh scorecard automatically.
+    if (this.store.get("test_since") === null) this.store.set("test_since", String(Date.now() / 1000));
     this.settings = loadSettings(env);
     this.problem = validate(env, this.settings);
   }
@@ -127,7 +132,7 @@ export class Bot extends DurableObject<Env> {
     return !!(this.env.KALSHI_API_KEY_ID && this.env.KALSHI_PRIVATE_KEY);
   }
 
-  async snapshot(viewArg?: string): Promise<Snapshot> {
+  async snapshot(viewArg?: string, all = false): Promise<Snapshot> {
     await this.start();
     const e = this.engine;
     const now = Date.now() / 1000;
@@ -136,6 +141,9 @@ export class Bot extends DurableObject<Env> {
     const mode = this.currentMode();
     const views = [...new Set([mode, ...this.store.modesWithTrades()])];
     const view = viewArg && views.includes(viewArg) ? viewArg : mode;
+    const testSince = Number(this.store.get("test_since") ?? 0);
+    const since = all ? 0 : testSince;
+    const range = this.priceRange();
     return {
       mode,
       view,
@@ -151,10 +159,13 @@ export class Bot extends DurableObject<Env> {
       horizons: Object.entries(HORIZONS).map(([key, h]) => ({ key, label: h.label, short: h.short })),
       limits: this.limitRows(),
       modelWeight: { value: this.modelWeight(), dflt: this.settings.modelWeight, options: MODEL_WEIGHT_OPTIONS },
-      summary: this.store.summary(view),
-      today: this.store.pnlForDay(tradingDay(now, tz), view),
-      byStrategy: this.store.byStrategy(view),
-      modelCheck: this.store.modelCheck(view),
+      summary: this.store.summary(view, since),
+      testSince,
+      showingAll: all,
+      priceRange: { min: range.minPrice, max: range.maxPrice, dfltMin: this.settings.minPrice, dfltMax: this.settings.maxPrice },
+      today: this.store.pnlForDay(tradingDay(now, tz), view, since),
+      byStrategy: this.store.byStrategy(view, since),
+      modelCheck: this.store.modelCheck(view, "crypto", since),
       ai: {
         on: !!(this.env.ANTHROPIC_API_KEY && (e?.s.aiEnabled ?? this.settings.aiEnabled)),
         status: e?.aiStatus ?? (this.env.ANTHROPIC_API_KEY ? "Starting…" : "Off: add the ANTHROPIC_API_KEY secret."),
@@ -162,7 +173,7 @@ export class Bot extends DurableObject<Env> {
         budget: e?.s.aiDailyBudget ?? this.settings.aiDailyBudget,
         trust: e ? e.aiTrustFactor() : 1,
         forecasts: this.store.recentForecasts(8),
-        check: this.store.modelCheck(view, "ai"),
+        check: this.store.modelCheck(view, "ai", since),
       },
       trades: this.store.recentTrades(view, 30),
       decisions: this.store.recentDecisions(25),
@@ -236,6 +247,27 @@ export class Bot extends DurableObject<Env> {
     this.store.set("mode", mode);
     this.engine?.applyOverrides();
     return null;
+  }
+
+  private priceRange(): { minPrice: number; maxPrice: number } {
+    try {
+      const r = cleanPriceRange(JSON.parse(this.store.get("price_range") ?? "null"));
+      if (r) return r;
+    } catch {}
+    return { minPrice: this.settings.minPrice, maxPrice: this.settings.maxPrice };
+  }
+
+  /** Save the bet price range (in cents from the dashboard). Returns a problem or null. */
+  async setPriceRange(minCents: number, maxCents: number): Promise<string | null> {
+    const r = cleanPriceRange({ minPrice: minCents / 100, maxPrice: maxCents / 100 });
+    if (!r) return "Price range must be between 1¢ and 99¢, lowest below highest.";
+    this.store.set("price_range", JSON.stringify(r));
+    this.engine?.applyOverrides();
+    return null;
+  }
+
+  async startFreshTest(): Promise<void> {
+    this.store.set("test_since", String(Date.now() / 1000));
   }
 
   async setHorizon(h: string): Promise<void> {

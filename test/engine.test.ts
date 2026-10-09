@@ -276,6 +276,31 @@ test("only one bet per market by default", async () => {
   assert.equal(store.marketExposure("KXBTCD-26OCT0911-T80000", "paper").orders, 1);
 });
 
+test("price range from the dashboard blocks long shots", async () => {
+  const { engine, store } = setup({ ARB_ENABLED: "false" });
+  store.set("price_range", JSON.stringify({ minPrice: 0.6, maxPrice: 0.8 })); // YES ask is 0.55 -> out of range
+  await engine.tick();
+  assert.equal(engine.s.minPrice, 0.6);
+  assert.equal(store.openTrades().length, 0);
+});
+
+test("fresh test: stats only count trades after it started", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  await engine.tick();
+  client.all[0].result = "no";
+  await engine.settle();
+  assert.equal(store.summary("paper").settled, 1);
+  assert.equal(store.summary("paper", NOW + 1).settled, 0);
+  assert.equal(store.modelCheck("paper", "crypto", NOW + 1).settled, 0);
+  assert.equal(store.byStrategy("paper", NOW + 1).length, 0);
+  const html = renderDashboard({ ...({} as any), mode: "paper", problem: null, status: "", lastError: null, alive: true, killSwitch: false,
+    horizon: "day", horizons: [], limits: [], summary: store.summary("paper", NOW + 1), today: 0, byStrategy: [],
+    trades: [], decisions: [], timezone: "America/New_York", diag: {}, testSince: NOW + 1,
+    priceRange: { min: 0.15, max: 0.85, dfltMin: 0.15, dfltMax: 0.85 } }, { authed: true, passwordSet: true });
+  assert.ok(html.includes("fresh test started") && html.includes('action="/fresh-test"'));
+  assert.ok(html.includes('action="/prices"') && html.includes('value="15"') && html.includes('value="85"'));
+});
+
 test("15-minute limit skips markets closing later", async () => {
   const { engine, store } = setup();
   store.set("horizon", "15m");

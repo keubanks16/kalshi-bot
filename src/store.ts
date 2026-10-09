@@ -147,7 +147,7 @@ export class Store {
     );
     return Math.max(0, -Number(r.realized)) + Number(r.at_risk);
   }
-  summary(mode: string): { trades: number; settled: number; wins: number; pnl: number; fees: number; openCost: number } {
+  summary(mode: string, since = 0): { trades: number; settled: number; wins: number; pnl: number; fees: number; openCost: number } {
     const r = this.one(
       `SELECT COUNT(*) AS trades,
               COALESCE(SUM(CASE WHEN result IS NOT NULL THEN 1 ELSE 0 END), 0) AS settled,
@@ -155,8 +155,9 @@ export class Store {
               COALESCE(SUM(pnl), 0) AS pnl,
               COALESCE(SUM(fee), 0) AS fees,
               COALESCE(SUM(CASE WHEN result IS NULL THEN cost ELSE 0 END), 0) AS open_cost
-       FROM trades WHERE mode = ?`,
+       FROM trades WHERE mode = ? AND ts >= ?`,
       mode,
+      since,
     );
     return {
       trades: Number(r.trades),
@@ -167,9 +168,10 @@ export class Store {
       openCost: Number(r.open_cost),
     };
   }
-  pnlForDay(day: string, mode: string): number {
-    return Number(this.one<{ p: number }>("SELECT COALESCE(SUM(pnl), 0) AS p FROM trades WHERE day = ? AND mode = ? AND result IS NOT NULL", day, mode).p);
+  pnlForDay(day: string, mode: string, since = 0): number {
+    return Number(this.one<{ p: number }>("SELECT COALESCE(SUM(pnl), 0) AS p FROM trades WHERE day = ? AND mode = ? AND ts >= ? AND result IS NOT NULL", day, mode, since).p);
   }
+
   // AI forecasts
   addForecast(f: { ts: number; day: string; ticker: string; title: string; p: number | null; confidence: string | null; summary: string; market_mid: number | null; cost: number; searches: number; action: string }): void {
     this.sql.exec(
@@ -188,20 +190,22 @@ export class Store {
   }
 
   /** How many bets of a strategy the model expected to win vs how many did. */
-  modelCheck(mode: string, strategy = "crypto"): { settled: number; expectedWins: number; actualWins: number; avgPrice: number } {
+  modelCheck(mode: string, strategy = "crypto", since = 0): { settled: number; expectedWins: number; actualWins: number; avgPrice: number } {
     const r = this.one(
       `SELECT COUNT(*) AS n, COALESCE(SUM(p_fair), 0) AS exp,
               COALESCE(SUM(CASE WHEN result = side THEN 1 ELSE 0 END), 0) AS won,
               COALESCE(AVG(price), 0) AS px
-       FROM trades WHERE mode = ? AND strategy = ? AND result IS NOT NULL AND p_fair IS NOT NULL`,
+       FROM trades WHERE mode = ? AND strategy = ? AND ts >= ? AND result IS NOT NULL AND p_fair IS NOT NULL`,
       mode,
       strategy,
+      since,
     );
     return { settled: Number(r.n), expectedWins: Number(r.exp), actualWins: Number(r.won), avgPrice: Number(r.px) };
   }
-  byStrategy(mode: string): { strategy: string; trades: number; pnl: number }[] {
-    return this.rows("SELECT strategy, COUNT(*) AS trades, COALESCE(SUM(pnl), 0) AS pnl FROM trades WHERE mode = ? GROUP BY strategy", mode) as any;
+  byStrategy(mode: string, since = 0): { strategy: string; trades: number; pnl: number }[] {
+    return this.rows("SELECT strategy, COUNT(*) AS trades, COALESCE(SUM(pnl), 0) AS pnl FROM trades WHERE mode = ? AND ts >= ? GROUP BY strategy", mode, since) as any;
   }
+
   recentTrades(mode: string, limit = 25): TradeRow[] {
     return this.rows<TradeRow>("SELECT * FROM trades WHERE mode = ? ORDER BY ts DESC LIMIT ?", mode, limit);
   }

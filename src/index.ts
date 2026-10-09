@@ -45,7 +45,7 @@ export default {
     ctx.waitUntil(stub.start());
 
     if (req.method === "GET" && url.pathname === "/") {
-      const snap = await stub.snapshot(url.searchParams.get("view") ?? undefined);
+      const snap = await stub.snapshot(url.searchParams.get("view") ?? undefined, url.searchParams.get("all") === "1");
       snap.message = url.searchParams.get("msg");
       const html = renderDashboard(snap, { authed: await isAuthed(req, env), passwordSet: !!env.DASHBOARD_PASSWORD });
       return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
@@ -82,6 +82,17 @@ export default {
       }
       const problem = await stub.setMode(mode);
       return homeMsg(problem ?? (mode === "live" ? "LIVE: the bot now trades real money." : "Back to paper trading."));
+    }
+
+    if (req.method === "POST" && (url.pathname === "/prices" || url.pathname === "/fresh-test")) {
+      if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+      const form = await req.formData();
+      if (url.pathname === "/fresh-test") {
+        await stub.startFreshTest();
+        return homeMsg("Fresh test started: stats and model checks now count from this moment.");
+      }
+      const problem = await stub.setPriceRange(Number(form.get("min")), Number(form.get("max")));
+      return homeMsg(problem ?? "Price range saved.");
     }
 
     if (req.method === "POST" && ["/kill", "/horizon", "/limits", "/model"].includes(url.pathname)) {

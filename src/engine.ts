@@ -7,7 +7,7 @@
 // Work per tick is capped so it fits Cloudflare's per-invocation subrequest
 // limit; the full market list is covered over several ticks.
 
-import { HORIZONS, cleanLimits, placesOrders, type Settings } from "./config.ts";
+import { HORIZONS, cleanLimits, cleanPriceRange, placesOrders, type Settings } from "./config.ts";
 import { KalshiClient, KalshiError, askSize, dollars, seriesOf, ts, type Market } from "./kalshi.ts";
 import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
 import type { PriceFeed } from "./prices.ts";
@@ -110,7 +110,11 @@ export class Engine {
     const mode = this.store.get("mode_override");
     const modeOverride = mode === "paper" || (mode === "live" && this.base.mode !== "demo") ? { mode: mode as Settings["mode"] } : {};
     const prevMode = this.s?.mode;
-    this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride };
+    let range = null;
+    try {
+      range = cleanPriceRange(JSON.parse(this.store.get("price_range") ?? "null"));
+    } catch {}
+    this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride, ...(range ?? {}) };
     if (prevMode && prevMode !== this.s.mode) this.bankrollCache = null;
   }
 

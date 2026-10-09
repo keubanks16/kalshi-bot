@@ -31,6 +31,8 @@
     "LIVE_STREAMS": "true",         // live websocket prices from Coinbase + Kraken (Workers Paid)
 
     "MIN_EDGE": "0.04",
+    "MIN_PRICE": "0.15",            // only bet between 15¢ and 85¢ (editable on the dashboard)
+    "MAX_PRICE": "0.85",
     "MIN_ARB_PROFIT": "0.02",
     "KELLY_FRACTION": "0.25",
     "MODEL_WEIGHT": "0.5",          // blend: 1 = trust the crypto model fully, 0.5 = halfway to the market price

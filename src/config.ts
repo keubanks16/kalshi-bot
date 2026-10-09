@@ -114,8 +114,8 @@ export function loadSettings(env: Env): Settings {
     minArbProfit: num(env, "MIN_ARB_PROFIT", 0.02),
     minSecondsLeft: num(env, "MIN_SECONDS_LEFT", 120),
     minSecondsElapsed: num(env, "MIN_SECONDS_ELAPSED", 60),
-    minPrice: num(env, "MIN_PRICE", 0.05),
-    maxPrice: num(env, "MAX_PRICE", 0.95),
+    minPrice: num(env, "MIN_PRICE", 0.15),
+    maxPrice: num(env, "MAX_PRICE", 0.85),
     minVol: num(env, "MIN_VOL", 0.2),
     maxVol: num(env, "MAX_VOL", 2.5),
     kellyFraction: num(env, "KELLY_FRACTION", 0.25),
@@ -199,4 +199,12 @@ export function cleanLimits(raw: Record<string, unknown>): Partial<Limits> {
     if (Number.isFinite(v) && v > 0 && v <= MAX_LIMIT) out[f.key] = Math.round(v * 100) / 100;
   }
   return out;
+}
+
+/** Bet price range saved from the dashboard, if valid. */
+export function cleanPriceRange(raw: unknown): { minPrice: number; maxPrice: number } | null {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const min = Number(r.minPrice);
+  const max = Number(r.maxPrice);
+  return min >= 0.01 && max <= 0.99 && min < max ? { minPrice: min, maxPrice: max } : null;
 }

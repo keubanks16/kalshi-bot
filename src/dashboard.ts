@@ -152,6 +152,33 @@ ${
     modeCard = `<div class="card"><div class="k">Trading mode</div><div class="v small">Paper — simulated trades</div>${body}</div>`;
   }
 
+  const pr = s.priceRange;
+  const cents = (x: number) => Math.round(x * 100);
+  const priceCard = !pr
+    ? ""
+    : `<div class="card"><div class="k">Bet price range</div>${
+        opts.authed
+          ? `<form method="post" action="/prices" class="limits">
+<label><span><b>Lowest</b><br><span class="sub">Skip long shots below this</span></span><span class="dollar"><input name="min" type="number" inputmode="numeric" min="1" max="98" step="1" value="${cents(pr.min)}">¢</span></label>
+<label><span><b>Highest</b><br><span class="sub">Skip near-sure things above this</span></span><span class="dollar"><input name="max" type="number" inputmode="numeric" min="2" max="99" step="1" value="${cents(pr.max)}">¢</span></label>
+<button class="go">Save range</button></form>`
+          : `<div class="v small">${cents(pr.min)}¢ – ${cents(pr.max)}¢</div>`
+      }<div class="sub" style="margin-top:8px">Only buys contracts priced inside this range. Default ${cents(pr.dfltMin)}–${cents(pr.dfltMax)}¢.</div></div>`;
+
+  const since = s.testSince ?? 0;
+  const sinceLabel = since ? `${date(since)} ${time(since)}` : "";
+  const testBar = !since
+    ? ""
+    : `<div class="card test">${
+        s.showingAll
+          ? `Showing <b>all history</b>. <a href="/">Back to the current test</a>`
+          : `Stats count trades since the <b>fresh test started ${esc(sinceLabel)}</b>. <a href="/?all=1">Show all history</a>`
+      }${
+        opts.authed
+          ? `<form method="post" action="/fresh-test" style="margin-top:8px"><button class="link">Start a new fresh test now</button></form>`
+          : ""
+      }</div>`;
+
   const limitsCard = opts.authed
     ? `<form method="post" action="/limits" class="limits">${s.limits
         .map(
@@ -206,6 +233,7 @@ details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px
 .views a.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .fc td{padding:10px 0}
 .row2{display:flex;justify-content:space-between;padding:4px 0}
+.test{font-size:14px}.test a{color:var(--accent)}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .top form{margin:0}button.link{background:none;color:var(--accent);padding:6px 0;width:auto;font-weight:600;font-size:14px}
 .strat{font-size:13px;color:var(--mute);margin-top:4px}.strat b{font-weight:600}
@@ -227,8 +255,11 @@ ${modeCard}
 
 ${modelCard}
 
+${priceCard}
+
 ${s.limits.length ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
 
+${testBar}
 ${viewSwitch}
 <div class="grid">
  <div class="card"><div class="k">Total P&amp;L</div><div class="v ${cls(sum.pnl)}">${esc(money(sum.pnl))}</div></div>
