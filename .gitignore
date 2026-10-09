@@ -1,0 +1,16 @@
+# secrets — never commit these
+.env
+*.pem
+*.key
+
+# runtime data
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
