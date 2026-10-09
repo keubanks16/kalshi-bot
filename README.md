@@ -21,6 +21,15 @@ A bot can only find a good trade when it has a source of truth that's better tha
 - It only trades when the locked-in profit after fees is at least `MIN_ARB_PROFIT` per set.
 - These opportunities are rare. Most of the time it will find none.
 
+**3. AI forecaster for slower markets** (economics, politics, weather, company news…). It needs an `ANTHROPIC_API_KEY` secret.
+
+- Every 10 minutes it picks one liquid, undecided, non-crypto market that closes at least 2 hours out and inside your time limit.
+- It asks Claude (Sonnet, with up to 3 web searches) for the probability of YES. Claude is never shown the market price, so its estimate is independent.
+- It blends that estimate with the market price using the trust setting, and bets only if the gap is at least 10¢ after fees and Claude's confidence isn't "low".
+- Every forecast is shown on the dashboard: Claude's probability, the market's, the decision, its reasoning, and what it cost.
+- **Max AI spend per day** (default $2, editable with the other limits) caps the API bill. A forecast typically costs about $0.05–0.15.
+- If settled AI bets win less often than Claude predicted, trust in the AI is cut automatically, down to half.
+
 Everything is held to settlement and then marked as a win or loss.
 
 ## Time limit

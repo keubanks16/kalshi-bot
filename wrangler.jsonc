@@ -34,6 +34,16 @@
     "KELLY_FRACTION": "0.25",
     "MODEL_WEIGHT": "0.5",          // blend: 1 = trust the crypto model fully, 0.5 = halfway to the market price
     "MIN_SECONDS_LEFT": "120",
+
+    // AI forecaster for slower, non-crypto markets (needs the ANTHROPIC_API_KEY secret)
+    "AI_ENABLED": "true",
+    "AI_MODEL": "claude-sonnet-5-5",
+    "AI_MIN_EDGE": "0.10",          // bigger bar than crypto: AI estimates are noisier
+    "AI_INTERVAL_MINUTES": "10",    // at most one forecast every 10 minutes
+    "AI_REFRESH_HOURS": "6",        // re-forecast a market at most every 6 hours
+    "AI_MIN_VOLUME": "1000",        // skip thin markets (contracts traded in 24h)
+    "AI_MIN_HOURS_TO_CLOSE": "2",
+    "AI_DAILY_BUDGET": "2",         // dollars of AI spend per day; editable on the dashboard
     "MIN_SECONDS_ELAPSED": "60",
 
     // Starting spending limits in dollars. Change them any time on the dashboard.

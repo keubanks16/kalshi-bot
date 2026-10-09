@@ -12,6 +12,7 @@ import { KalshiClient, KalshiError, askSize, dollars, seriesOf, ts, type Market 
 import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
 import type { PriceFeed } from "./prices.ts";
 import type { Store } from "./store.ts";
+import { AiError, forecast as aiForecast, type Forecast } from "./ai.ts";
 
 const MAX_EVENT_LOOKUPS_PER_TICK = 5;
 const EVENT_CACHE_SECONDS = 3600;
@@ -28,7 +29,7 @@ interface SeriesState {
 }
 
 interface BuyOrder {
-  strategy: "crypto" | "arb";
+  strategy: "crypto" | "arb" | "ai";
   market: Market;
   side: "yes" | "no";
   contracts: number;
@@ -52,6 +53,12 @@ export class Engine {
 
   // in-memory state (rebuilt automatically if the object restarts)
   series = new Map<string, SeriesState>();
+  // AI forecaster state
+  aiKey = "";
+  aiCandidates = new Map<string, Market>();
+  aiStatus = "starting";
+  lastAiAt = 0;
+  aiForecastFn: typeof aiForecast = aiForecast;
   eventInfo = new Map<string, { exclusive: boolean; standardFees: boolean; at: number }>();
   cursor = "";
   useTsFilter = true;
@@ -219,6 +226,10 @@ export class Engine {
       const asset = this.cryptoAsset(m);
       const series = seriesOf(m.event_ticker);
       if (asset && !this.series.has(series)) this.series.set(series, { asset, nextCheck: now, lastLogged: 0 });
+      if (!asset && !this.isCryptoSeries(series) && this.aiWorthy(m, now)) {
+        this.aiCandidates.set(m.ticker, m);
+        if (this.aiCandidates.size > 1000) this.aiCandidates.delete(this.aiCandidates.keys().next().value!); // drop oldest
+      }
     }
 
     if (this.s.arbEnabled) {
@@ -350,6 +361,112 @@ export class Engine {
     }
   }
 
+  // ----------------------------------------------------------- AI forecaster
+  isCryptoSeries(series: string): boolean {
+    return this.s.cryptoAssets.some((a) => series.startsWith(`KX${a}`));
+  }
+
+  /** Liquid, two-sided, undecided, and far enough from closing for a slow forecast. */
+  aiWorthy(m: Market, now: number): boolean {
+    const bid = dollars(m, "yes_bid");
+    const ask = dollars(m, "yes_ask");
+    if (bid === null || ask === null || !(ask > bid) || ask - bid > 0.1) return false;
+    const mid = (bid + ask) / 2;
+    if (mid < 0.08 || mid > 0.92) return false;
+    if (volume24h(m) < this.s.aiMinVolume) return false;
+    return ts(m.close_time) - now >= this.s.aiMinHoursToClose * 3600 && (!m.status || m.status === "active");
+  }
+
+  /** Trust in AI shrinks if its settled bets win less often than it predicted. */
+  aiTrustFactor(): number {
+    const mc = this.store.modelCheck(this.s.mode, "ai");
+    if (mc.settled < 20 || mc.expectedWins <= 0) return 1;
+    return Math.min(1, Math.max(0.5, mc.actualWins / mc.expectedWins));
+  }
+
+  /** At most one forecast per call; the Durable Object runs this in the background. */
+  async runAi(now: number): Promise<void> {
+    if (!this.s.aiEnabled) return void (this.aiStatus = "Off (AI_ENABLED is false).");
+    if (!this.aiKey) return void (this.aiStatus = "Off: add the ANTHROPIC_API_KEY secret.");
+    if (this.store.killSwitchOn()) return void (this.aiStatus = "Paused by the kill switch.");
+    if (now - this.lastAiAt < this.s.aiIntervalMinutes * 60) return;
+
+    const day = tradingDay(now, this.s.timezone);
+    const spent = this.store.aiSpend(day);
+    if (spent + 0.25 > this.s.aiDailyBudget) {
+      this.aiStatus = `Daily AI budget used ($${spent.toFixed(2)} of $${this.s.aiDailyBudget.toFixed(2)}). Resumes tomorrow.`;
+      return;
+    }
+
+    const maxClose = this.maxClose(now);
+    const pick = [...this.aiCandidates.values()]
+      .filter((m) => (maxClose === null || ts(m.close_time) <= maxClose) && this.aiWorthy(m, now))
+      .filter((m) => now - this.store.lastForecastTs(m.ticker) >= this.s.aiRefreshHours * 3600)
+      .filter((m) => this.store.openSides(m.ticker, this.s.mode).length === 0)
+      .sort((a, b) => volume24h(b) - volume24h(a))[0];
+    this.lastAiAt = now;
+    if (!pick) {
+      this.aiStatus =
+        maxClose !== null && maxClose - now < this.s.aiMinHoursToClose * 3600
+          ? `Idle: your time limit is shorter than the ${this.s.aiMinHoursToClose}h the AI needs. Pick 1 day or longer.`
+          : `Idle: no new liquid markets to research yet (${this.aiCandidates.size} seen so far).`;
+      return;
+    }
+    this.aiCandidates.delete(pick.ticker);
+
+    let eventTitle = pick.event_ticker;
+    try {
+      const ev = await this.client.getEvent(pick.event_ticker);
+      eventTitle = String(ev.title ?? eventTitle);
+      if (ev.fee_type_override || ev.fee_multiplier_override) {
+        this.store.addForecast({ ts: now, day, ticker: pick.ticker, title: eventTitle, p: null, confidence: null, summary: "Skipped: non-standard fees.", market_mid: null, cost: 0, searches: 0, action: "skip" });
+        return;
+      }
+    } catch {
+      /* title is cosmetic */
+    }
+    const title = [eventTitle, String(pick.yes_sub_title ?? pick.title ?? "")].filter(Boolean).join(" — ");
+
+    this.aiStatus = `Researching: ${title}`;
+    let f: Forecast;
+    try {
+      f = await this.aiForecastFn(
+        { eventTitle, marketTitle: String(pick.yes_sub_title ?? pick.title ?? pick.ticker), rules: [pick.rules_primary, pick.rules_secondary].filter(Boolean).join("\n\n"), closeTime: pick.close_time, now: new Date(now * 1000).toISOString() },
+        { apiKey: this.aiKey, model: this.s.aiModel, maxSearches: this.s.aiMaxSearches, inputPricePerM: this.s.aiInputPrice, outputPricePerM: this.s.aiOutputPrice },
+      );
+    } catch (e) {
+      const cost = e instanceof AiError ? e.cost : 0;
+      this.store.addForecast({ ts: now, day, ticker: pick.ticker, title, p: null, confidence: null, summary: `Failed: ${(e as Error).message}`, market_mid: null, cost, searches: 0, action: "error" });
+      this.aiStatus = `Last forecast failed: ${(e as Error).message}`;
+      return;
+    }
+
+    // Prices may have moved while Claude was researching.
+    const m = await this.client.getMarket(pick.ticker);
+    const bid = dollars(m, "yes_bid");
+    const ask = dollars(m, "yes_ask");
+    const mid = bid !== null && ask !== null ? (bid + ask) / 2 : null;
+    const weight = this.s.modelWeight * this.aiTrustFactor();
+    const p = blendWithMarket(f.probability, bid, ask, weight);
+
+    let action: string;
+    if (f.confidence === "low") {
+      action = "no bet: low confidence";
+    } else {
+      const d = decideBinary(p, ask, dollars(m, "no_ask"), await this.bankroll(), { ...this.s, minEdge: this.s.aiMinEdge });
+      const side = sideOf(d);
+      if (side && d.price !== undefined) {
+        const filled = await this.buy({ strategy: "ai", market: { ...pick, ...m }, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, note: f.summary });
+        action = filled ? `bought ${filled} ${side.toUpperCase()} @ $${d.price.toFixed(2)} (edge ${fmtEdge(d.edge)})` : `edge ${fmtEdge(d.edge)} but blocked by limits`;
+      } else {
+        action = `no bet: ${d.reason}`;
+      }
+    }
+    this.store.addForecast({ ts: now, day, ticker: pick.ticker, title, p: f.probability, confidence: f.confidence, summary: f.summary, market_mid: mid, cost: f.cost, searches: f.searches, action });
+    this.store.addDecision({ ts: now, strategy: "ai", ticker: pick.ticker, action: action.startsWith("bought") ? "buy" : "hold", reason: `AI ${(f.probability * 100).toFixed(0)}% vs market ${mid === null ? "?" : (mid * 100).toFixed(0) + "%"}: ${action}`, p_fair: p, price: mid });
+    this.aiStatus = `Last: ${title} — AI ${(f.probability * 100).toFixed(0)}%, ${action}`;
+  }
+
   // ------------------------------------------------------------ execution
   async bankroll(): Promise<number> {
     if (this.bankrollCache) return this.bankrollCache.value;
@@ -435,6 +552,10 @@ export class Engine {
 }
 
 /** Weighted average of the model's P(yes) and the market's mid price (model only if no quotes). */
+export function volume24h(m: Market): number {
+  return Number(m.volume_24h_fp ?? m.volume_24h ?? 0) || 0;
+}
+
 export function blendWithMarket(model: number, yesBid: number | null, yesAsk: number | null, weight: number): number {
   if (yesBid === null || yesAsk === null || !(yesAsk > yesBid)) return model;
   const mid = (yesBid + yesAsk) / 2;

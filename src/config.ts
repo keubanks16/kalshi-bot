@@ -7,6 +7,7 @@ export interface Env {
   KALSHI_API_KEY_ID?: string;
   KALSHI_PRIVATE_KEY?: string; // the whole PEM file, pasted as-is
   DASHBOARD_PASSWORD?: string;
+  ANTHROPIC_API_KEY?: string; // enables the AI forecaster
   // plain settings (strings from wrangler.jsonc "vars")
   [key: string]: unknown;
 }
@@ -52,7 +53,20 @@ export interface Settings {
   maxVol: number;
   kellyFraction: number;
   takerFeeRate: number;
-  modelWeight: number; // 0..1, how much to trust our crypto model vs the market price
+  modelWeight: number; // 0..1, how much to trust our own estimates vs the market price
+
+  // AI forecaster (slower, non-crypto markets)
+  aiEnabled: boolean;
+  aiModel: string;
+  aiMinEdge: number;
+  aiIntervalMinutes: number; // at most one forecast this often
+  aiRefreshHours: number; // don't re-forecast a market sooner than this
+  aiMinVolume: number; // contracts traded in the last 24h
+  aiMinHoursToClose: number; // AI is slow; skip markets closing sooner
+  aiMaxSearches: number;
+  aiInputPrice: number; // $ per million tokens
+  aiOutputPrice: number;
+  aiDailyBudget: number; // $ of AI spend per day (dashboard-editable)
 
   // risk limits
   bankroll: number;
@@ -106,6 +120,18 @@ export function loadSettings(env: Env): Settings {
     takerFeeRate: num(env, "TAKER_FEE_RATE", 0.07),
     modelWeight: num(env, "MODEL_WEIGHT", 0.5),
 
+    aiEnabled: bool(env, "AI_ENABLED", true),
+    aiModel: str(env, "AI_MODEL", "claude-sonnet-5-5"),
+    aiMinEdge: num(env, "AI_MIN_EDGE", 0.1),
+    aiIntervalMinutes: num(env, "AI_INTERVAL_MINUTES", 10),
+    aiRefreshHours: num(env, "AI_REFRESH_HOURS", 6),
+    aiMinVolume: num(env, "AI_MIN_VOLUME", 1000),
+    aiMinHoursToClose: num(env, "AI_MIN_HOURS_TO_CLOSE", 2),
+    aiMaxSearches: num(env, "AI_MAX_SEARCHES", 3),
+    aiInputPrice: num(env, "AI_INPUT_PRICE", 2),
+    aiOutputPrice: num(env, "AI_OUTPUT_PRICE", 10),
+    aiDailyBudget: num(env, "AI_DAILY_BUDGET", 2),
+
     bankroll: num(env, "BANKROLL", 100),
     maxContractsPerOrder: num(env, "MAX_CONTRACTS_PER_ORDER", 10),
     maxCostPerOrder: num(env, "MAX_COST_PER_ORDER", 5),
@@ -151,6 +177,7 @@ export const LIMIT_FIELDS = [
   { key: "maxCostPerEvent", label: "Max per event", help: "Total across related markets" },
   { key: "maxOpenRisk", label: "Max open at once", help: "Total in trades not yet settled" },
   { key: "maxDailyLoss", label: "Daily loss limit", help: "Stops new trades for the day after this" },
+  { key: "aiDailyBudget", label: "Max AI spend per day", help: "Claude + web search costs for forecasts" },
 ] as const;
 
 export type LimitKey = (typeof LIMIT_FIELDS)[number]["key"];

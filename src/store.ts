@@ -43,6 +43,22 @@ const SCHEMA = [
     price REAL
   )`,
   `CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)`,
+  `CREATE TABLE IF NOT EXISTS ai_forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    day TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    title TEXT,
+    p REAL,
+    confidence TEXT,
+    summary TEXT,
+    market_mid REAL,
+    cost REAL NOT NULL,
+    searches INTEGER,
+    action TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS ai_ticker ON ai_forecasts(ticker)`,
+  `CREATE INDEX IF NOT EXISTS ai_day ON ai_forecasts(day)`,
 ];
 
 export interface TradeRow {
@@ -154,14 +170,32 @@ export class Store {
   pnlForDay(day: string, mode: string): number {
     return Number(this.one<{ p: number }>("SELECT COALESCE(SUM(pnl), 0) AS p FROM trades WHERE day = ? AND mode = ? AND result IS NOT NULL", day, mode).p);
   }
-  /** How many crypto bets the model expected to win vs how many did. */
-  modelCheck(mode: string): { settled: number; expectedWins: number; actualWins: number; avgPrice: number } {
+  // AI forecasts
+  addForecast(f: { ts: number; day: string; ticker: string; title: string; p: number | null; confidence: string | null; summary: string; market_mid: number | null; cost: number; searches: number; action: string }): void {
+    this.sql.exec(
+      "INSERT INTO ai_forecasts (ts, day, ticker, title, p, confidence, summary, market_mid, cost, searches, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      f.ts, f.day, f.ticker, f.title, f.p, f.confidence, f.summary, f.market_mid, f.cost, f.searches, f.action,
+    );
+  }
+  aiSpend(day: string): number {
+    return Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM ai_forecasts WHERE day = ?", day).c);
+  }
+  lastForecastTs(ticker: string): number {
+    return Number(this.one<{ t: number }>("SELECT COALESCE(MAX(ts), 0) AS t FROM ai_forecasts WHERE ticker = ?", ticker).t);
+  }
+  recentForecasts(limit = 8): Record<string, any>[] {
+    return this.rows("SELECT * FROM ai_forecasts ORDER BY id DESC LIMIT ?", limit);
+  }
+
+  /** How many bets of a strategy the model expected to win vs how many did. */
+  modelCheck(mode: string, strategy = "crypto"): { settled: number; expectedWins: number; actualWins: number; avgPrice: number } {
     const r = this.one(
       `SELECT COUNT(*) AS n, COALESCE(SUM(p_fair), 0) AS exp,
               COALESCE(SUM(CASE WHEN result = side THEN 1 ELSE 0 END), 0) AS won,
               COALESCE(AVG(price), 0) AS px
-       FROM trades WHERE mode = ? AND strategy = 'crypto' AND result IS NOT NULL AND p_fair IS NOT NULL`,
+       FROM trades WHERE mode = ? AND strategy = ? AND result IS NOT NULL AND p_fair IS NOT NULL`,
       mode,
+      strategy,
     );
     return { settled: Number(r.n), expectedWins: Number(r.exp), actualWins: Number(r.won), avgPrice: Number(r.px) };
   }

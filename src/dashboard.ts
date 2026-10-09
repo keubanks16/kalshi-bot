@@ -7,7 +7,7 @@ const esc = (v: unknown) =>
 
 const money = (x: number) => `${x >= 0 ? "+" : "−"}$${Math.abs(x).toFixed(2)}`;
 const cls = (x: number | null) => (x === null ? "" : x >= 0 ? "up" : "down");
-const STRATEGY: Record<string, string> = { crypto: "Crypto", arb: "Arbitrage" };
+const STRATEGY: Record<string, string> = { crypto: "Crypto", arb: "Arbitrage", ai: "AI" };
 
 export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwordSet: boolean }): string {
   // During a deploy the page can update before the bot does, so tolerate
@@ -78,6 +78,29 @@ export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwor
         })()
       : "";
 
+  const ai = s.ai;
+  const pctv = (x: number | null | undefined) => (x === null || x === undefined ? "—" : `${Math.round(x * 100)}%`);
+  const aiCard = !ai
+    ? ""
+    : `<div class="card"><div class="k">AI forecaster</div>
+<div>${esc(ai.status)}</div>
+<div class="sub" style="margin-top:4px">Spent today $${ai.spentToday.toFixed(2)} of $${ai.budget.toFixed(2)}${
+        ai.check.settled ? ` · AI bets: expected ${ai.check.expectedWins.toFixed(1)} wins, got ${ai.check.actualWins} of ${ai.check.settled}` : ""
+      }${ai.trust < 1 ? ` · trust reduced to ${Math.round(ai.trust * 100)}% (losing more than predicted)` : ""}</div>
+${
+  ai.forecasts.length
+    ? `<table class="fc">${ai.forecasts
+        .map(
+          (f) => `<tr><td class="wrap"><b>${esc(f.title || f.ticker)}</b><br>
+<span>AI ${esc(pctv(f.p))} · market ${esc(pctv(f.market_mid))}${f.confidence ? ` · ${esc(f.confidence)} confidence` : ""}</span><br>
+<span class="${String(f.action).startsWith("bought") ? "up" : "sub"}">${esc(f.action)}</span><br>
+<span class="sub">${esc(f.summary)}</span><br>
+<span class="sub">${esc(time(f.ts))} · $${Number(f.cost).toFixed(2)}${f.searches ? ` · ${f.searches} searches` : ""}</span></td></tr>`,
+        )
+        .join("")}</table>`
+    : `<div class="sub" style="margin-top:8px">No forecasts yet.</div>`
+}</div>`;
+
   const strat = s.byStrategy.length
     ? s.byStrategy.map((b) => `<span>${esc(STRATEGY[b.strategy] ?? b.strategy)}: ${b.trades} trades, <b class="${cls(b.pnl)}">${esc(money(b.pnl))}</b></span>`).join(" · ")
     : "";
@@ -92,13 +115,13 @@ export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwor
   const pct = (w: number) => `${Math.round(w * 100)}%`;
   const modelCard = !mw
     ? ""
-    : `<div class="card"><div class="k">Trust in the crypto model</div>${
+    : `<div class="card"><div class="k">Trust in the bot's own estimates</div>${
         opts.authed
           ? `<form method="post" action="/model" class="seg">${mw.options
               .map((w) => `<button name="weight" value="${w}" class="${Math.abs(w - mw.value) < 1e-9 ? "on" : ""}">${pct(w)}</button>`)
               .join("")}</form>`
           : `<div class="v small">${pct(mw.value)}</div>`
-      }<div class="sub" style="margin-top:8px">Lower blends its estimate more toward the market's price, so it trades less and only on bigger disagreements. 100% trusts the model alone. Default ${pct(mw.dflt)}.</div></div>`;
+      }<div class="sub" style="margin-top:8px">Applies to the crypto model and the AI. Lower blends their estimates more toward the market's price, so the bot trades less and only on bigger disagreements. 100% trusts them alone. Default ${pct(mw.dflt)}.</div></div>`;
 
   const view = s.view ?? s.mode;
   const views = s.views ?? [s.mode];
@@ -181,6 +204,7 @@ details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px
 .check input{width:auto;margin:3px 0 0}
 .views{margin-top:16px}.views a{flex:1;text-align:center;padding:9px 6px;border:1px solid var(--line);border-radius:10px;color:var(--ink);text-decoration:none;font-size:13px;font-weight:600}
 .views a.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.fc td{padding:10px 0}
 .row2{display:flex;justify-content:space-between;padding:4px 0}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .top form{margin:0}button.link{background:none;color:var(--accent);padding:6px 0;width:auto;font-weight:600;font-size:14px}
@@ -214,6 +238,7 @@ ${viewSwitch}
 </div>
 ${strat ? `<div class="strat">${strat}</div>` : ""}
 ${check}
+${aiCard}
 
 ${
   opts.authed

@@ -205,6 +205,10 @@ export class KalshiClient {
     return this.getMarkets({ tickers: tickers.join(","), limit: Math.min(1000, tickers.length) });
   }
 
+  async getMarket(ticker: string): Promise<Market> {
+    return (await this.request<{ market: Market }>("GET", `/markets/${ticker}`)).market;
+  }
+
   async getEvent(eventTicker: string): Promise<KalshiEvent> {
     const d = await this.request<{ event: KalshiEvent }>("GET", `/events/${eventTicker}`);
     return d.event;

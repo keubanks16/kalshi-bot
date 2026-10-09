@@ -26,6 +26,15 @@ export interface Snapshot {
   limits: { key: string; label: string; help: string; value: number; dflt: number }[];
   modelWeight?: { value: number; dflt: number; options: number[] };
   modelCheck?: { settled: number; expectedWins: number; actualWins: number; avgPrice: number };
+  ai?: {
+    on: boolean;
+    status: string;
+    spentToday: number;
+    budget: number;
+    trust: number;
+    forecasts: Record<string, any>[];
+    check: { settled: number; expectedWins: number; actualWins: number; avgPrice: number };
+  };
   summary: ReturnType<Store["summary"]>;
   today: number;
   byStrategy: { strategy: string; trades: number; pnl: number }[];
@@ -35,7 +44,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.5.1";
+export const VERSION = "0.6.0";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
@@ -60,6 +69,7 @@ export class Bot extends DurableObject<Env> {
     const key = this.env.KALSHI_PRIVATE_KEY && this.env.KALSHI_API_KEY_ID ? await importPrivateKey(String(this.env.KALSHI_PRIVATE_KEY)) : null;
     const client = new KalshiClient(baseUrl(this.env, s), String(this.env.KALSHI_API_KEY_ID ?? ""), key);
     this.engine = new Engine(s, client, new PriceFeed(), this.store);
+    this.engine.aiKey = String(this.env.ANTHROPIC_API_KEY ?? "");
     this.store.set("mode", s.mode);
     return this.engine;
   }
@@ -71,6 +81,7 @@ export class Bot extends DurableObject<Env> {
   }
 
   private ticking = false;
+  private aiRunning = false;
   private tickStarted = 0;
 
   async alarm(): Promise<void> {
@@ -89,6 +100,16 @@ export class Bot extends DurableObject<Env> {
         await engine.tick();
       } catch (e) {
         engine.lastError = `${new Date().toISOString().slice(11, 19)} UTC — ${(e as Error).message}`;
+      }
+      // AI research takes up to a couple of minutes, so it runs alongside the
+      // fast loop instead of blocking it.
+      if (!this.aiRunning) {
+        this.aiRunning = true;
+        const job = engine
+          .runAi(Date.now() / 1000)
+          .catch((e) => void (engine.aiStatus = `AI error: ${(e as Error).message}`))
+          .finally(() => (this.aiRunning = false));
+        this.ctx.waitUntil(job);
       }
     } finally {
       this.ticking = false;
@@ -134,6 +155,15 @@ export class Bot extends DurableObject<Env> {
       today: this.store.pnlForDay(tradingDay(now, tz), view),
       byStrategy: this.store.byStrategy(view),
       modelCheck: this.store.modelCheck(view),
+      ai: {
+        on: !!(this.env.ANTHROPIC_API_KEY && (e?.s.aiEnabled ?? this.settings.aiEnabled)),
+        status: e?.aiStatus ?? (this.env.ANTHROPIC_API_KEY ? "Starting…" : "Off: add the ANTHROPIC_API_KEY secret."),
+        spentToday: this.store.aiSpend(tradingDay(now, tz)),
+        budget: e?.s.aiDailyBudget ?? this.settings.aiDailyBudget,
+        trust: e ? e.aiTrustFactor() : 1,
+        forecasts: this.store.recentForecasts(8),
+        check: this.store.modelCheck(view, "ai"),
+      },
       trades: this.store.recentTrades(view, 30),
       decisions: this.store.recentDecisions(25),
       timezone: tz,
