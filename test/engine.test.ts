@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { loadSettings } from "../src/config.ts";
-import { Engine } from "../src/engine.ts";
+import { Engine, blendWithMarket } from "../src/engine.ts";
 import { Store, type Sql } from "../src/store.ts";
 import { renderDashboard } from "../src/dashboard.ts";
 import { KalshiError } from "../src/kalshi.ts";
@@ -193,6 +193,23 @@ test("dashboard survives an older bot without limits or short labels", () => {
     { authed: true, passwordSet: true },
   );
   assert.ok(html.includes("Kalshi Bot"));
+});
+
+test("never buys the opposite side of an open position", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  await engine.tick();
+  assert.equal(store.openTrades()[0].side, "yes");
+  // BTC collapses: the model now wants NO on the same market
+  (engine.feed as any).spot = async () => 79000;
+  client.all[0].no_ask_dollars = "0.40";
+  engine.series.forEach((st) => (st.nextCheck = 0));
+  await engine.tick();
+  assert.deepEqual(store.openSides("KXBTCD-26OCT0911-T80000"), ["yes"]);
+});
+
+test("model is blended halfway toward the market price", () => {
+  assert.equal(blendWithMarket(0.3, 0.12, 0.14, 0.5), 0.215);
+  assert.equal(blendWithMarket(0.3, null, 0.14, 0.5), 0.3);
 });
 
 test("15-minute limit skips markets closing later", async () => {

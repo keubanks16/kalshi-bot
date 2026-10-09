@@ -32,6 +32,7 @@
     "MIN_EDGE": "0.04",
     "MIN_ARB_PROFIT": "0.02",
     "KELLY_FRACTION": "0.25",
+    "MODEL_WEIGHT": "0.5",          // blend: 1 = trust the crypto model fully, 0.5 = halfway to the market price
     "MIN_SECONDS_LEFT": "120",
     "MIN_SECONDS_ELAPSED": "60",
 

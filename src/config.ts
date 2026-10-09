@@ -52,6 +52,7 @@ export interface Settings {
   maxVol: number;
   kellyFraction: number;
   takerFeeRate: number;
+  modelWeight: number; // 0..1, how much to trust our crypto model vs the market price
 
   // risk limits
   bankroll: number;
@@ -103,6 +104,7 @@ export function loadSettings(env: Env): Settings {
     maxVol: num(env, "MAX_VOL", 2.5),
     kellyFraction: num(env, "KELLY_FRACTION", 0.25),
     takerFeeRate: num(env, "TAKER_FEE_RATE", 0.07),
+    modelWeight: num(env, "MODEL_WEIGHT", 0.5),
 
     bankroll: num(env, "BANKROLL", 100),
     maxContractsPerOrder: num(env, "MAX_CONTRACTS_PER_ORDER", 10),
@@ -135,6 +137,7 @@ export function validate(env: Env, s: Settings): string | null {
     if (!env.KALSHI_PRIVATE_KEY) return "KALSHI_PRIVATE_KEY secret is missing";
   }
   if (!(s.kellyFraction > 0 && s.kellyFraction <= 1)) return "KELLY_FRACTION must be between 0 and 1";
+  if (!(s.modelWeight > 0 && s.modelWeight <= 1)) return "MODEL_WEIGHT must be between 0 and 1";
   if (s.pollSeconds < 5) return "POLL_SECONDS must be at least 5";
   if (!HORIZONS[s.defaultHorizon]) return `TRADE_HORIZON must be one of ${Object.keys(HORIZONS).join(", ")}`;
   return null;

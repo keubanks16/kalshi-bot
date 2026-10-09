@@ -317,8 +317,11 @@ export class Engine {
         const rawVol = await this.feed.volatility(st.asset, secondsLeft);
         const vol = Math.min(Math.max(rawVol, this.s.minVol), this.s.maxVol);
         const averaged = /average/i.test(String(m.rules_primary ?? ""));
-        const p = probYesForStrike(String(m.strike_type), num(m.floor_strike), num(m.cap_strike), spot, secondsLeft, vol, averaged);
-        if (p === null) continue;
+        const model = probYesForStrike(String(m.strike_type), num(m.floor_strike), num(m.cap_strike), spot, secondsLeft, vol, averaged);
+        if (model === null) continue;
+        // Humility: the market sees the exact settlement index and we only
+        // approximate it, so blend our estimate with the market's own price.
+        const p = blendWithMarket(model, dollars(m, "yes_bid"), dollars(m, "yes_ask"), this.s.modelWeight);
 
         const d = decideBinary(p, dollars(m, "yes_ask"), dollars(m, "no_ask"), bankroll, this.s);
         const side = sideOf(d);
@@ -375,6 +378,8 @@ export class Engine {
   /** Place (or simulate) a buy within every limit. Returns contracts filled. */
   async buy(o: BuyOrder): Promise<number> {
     const m = o.market;
+    // Never bet against our own open position on the same market.
+    if (this.store.openSides(m.ticker).some((side) => side !== o.side)) return 0;
     const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker), this.s.takerFeeRate);
     if (contracts < 1) return 0;
 
@@ -421,6 +426,13 @@ export class Engine {
     this.bankrollCache = null;
     return filled;
   }
+}
+
+/** Weighted average of the model's P(yes) and the market's mid price (model only if no quotes). */
+export function blendWithMarket(model: number, yesBid: number | null, yesAsk: number | null, weight: number): number {
+  if (yesBid === null || yesAsk === null || !(yesAsk > yesBid)) return model;
+  const mid = (yesBid + yesAsk) / 2;
+  return weight * model + (1 - weight) * mid;
 }
 
 function num(v: unknown): number | null {

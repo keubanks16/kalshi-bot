@@ -105,6 +105,9 @@ export class Store {
   settleTrade(id: number, result: string, pnl: number, now: number): void {
     this.sql.exec("UPDATE trades SET result = ?, pnl = ?, settled_ts = ? WHERE id = ?", result, pnl, now, id);
   }
+  openSides(ticker: string): string[] {
+    return this.rows<{ side: string }>("SELECT DISTINCT side FROM trades WHERE ticker = ? AND result IS NULL", ticker).map((r) => r.side);
+  }
   marketExposure(ticker: string): { cost: number; orders: number } {
     const r = this.one<{ cost: number; n: number }>("SELECT COALESCE(SUM(cost), 0) AS cost, COUNT(*) AS n FROM trades WHERE ticker = ?", ticker);
     return { cost: Number(r.cost), orders: Number(r.n) };
