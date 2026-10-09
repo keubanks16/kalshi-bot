@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanPicks, marketFor, readScreenshot, type ShotPick } from "../src/screenshot.ts";
+import { cleanPicks, marketFor, picksFromText, readScreenshot, type ShotPick } from "../src/screenshot.ts";
 import { PicksScanner, chanceFor, chanceText, extractQuotes, findGame, judge, type PicksSettings } from "../src/prizepicks.ts";
 
 const NOW = Date.parse("2026-10-09T18:40:00Z") / 1000; // Fri 2:40 PM Eastern
@@ -51,7 +51,7 @@ test("sends the image to Claude with a forced tool and reads the picks back", as
     return new Response(JSON.stringify({ content: [{ type: "tool_use", name: "report_picks", input: SHOT }], usage: { input_tokens: 2000, output_tokens: 400 } }));
   }) as unknown as typeof fetch;
   const r = await readScreenshot("AAAA", "image/png", { apiKey: "k", model: "m", inputPricePerM: 3, outputPricePerM: 15 }, fetchFn);
-  assert.equal(sent.tool_choice.name, "report_picks");
+  assert.equal(sent.tool_choice.type, "auto"); // forcing a tool isn't supported by every model
   assert.equal(sent.messages[0].content[0].source.media_type, "image/png");
   assert.equal(r.picks.length, 6);
   assert.ok(Math.abs(r.cost - (2000 * 3 + 400 * 15) / 1e6) < 1e-12);
@@ -62,6 +62,16 @@ const ou = (player: string, point: number, over: number, under: number) => [
   { name: "Under", description: player, price: under, point },
 ];
 const lineOf = (player: string, market: string, line: number) => ({ player, stat: "", market, line });
+
+test("accepts a plain-JSON reply when Claude doesn't call the tool", async () => {
+  const fetchFn = (async () =>
+    new Response(JSON.stringify({ content: [{ type: "text", text: "Here you go:\n```json\n" + JSON.stringify(SHOT) + "\n```" }], usage: { input_tokens: 10, output_tokens: 10 } }))) as unknown as typeof fetch;
+  const r = await readScreenshot("AAAA", "image/png", { apiKey: "k", model: "m", inputPricePerM: 3, outputPricePerM: 15 }, fetchFn);
+  assert.equal(r.picks.length, 6);
+  assert.equal(picksFromText("no json here"), null);
+  const none = (async () => new Response(JSON.stringify({ content: [{ type: "text", text: "I can't read that." }] }))) as unknown as typeof fetch;
+  await assert.rejects(readScreenshot("AAAA", "image/png", { apiKey: "k", model: "m", inputPricePerM: 3, outputPricePerM: 15 }, none), /didn't list the picks/);
+});
 
 test("a side's chance: exact, at least, at most, or a range", () => {
   const q = extractQuotes({

@@ -29,7 +29,9 @@ For each card report:
 - teams: the two teams' full names for that league (e.g. ["Atlanta Dream", "New York Liberty"]); [] if you can't tell
 - when: the game time exactly as shown
 
-Only report what is visible. Do not estimate chances or give advice.`;
+Only report what is visible. Do not estimate chances or give advice.
+
+Report the cards by calling the report_picks tool once. If you can't use the tool, reply with only the JSON object {"picks": [...]} instead.`;
 
 const TOOL = {
   name: "report_picks",
@@ -95,8 +97,9 @@ export async function readScreenshot(
     body: JSON.stringify({
       model: cfg.model,
       max_tokens: 2000,
+      // Some models don't allow forcing a tool, so offer it and also accept plain JSON.
       tools: [TOOL],
-      tool_choice: { type: "tool", name: TOOL.name },
+      tool_choice: { type: "auto" },
       messages: [
         {
           role: "user",
@@ -113,8 +116,28 @@ export async function readScreenshot(
   if (!resp.ok) throw new Error(`Claude API ${resp.status}: ${body.slice(0, 200)}`);
   const data = JSON.parse(body);
   const { cost } = costOf(data.usage ?? {}, cfg);
-  const use = (data.content ?? []).find((b: any) => b.type === "tool_use");
-  return { picks: cleanPicks(use?.input), cost };
+  const use = (data.content ?? []).find((b: any) => b.type === "tool_use" && b.name === TOOL.name);
+  if (use) return { picks: cleanPicks(use.input), cost };
+  const text = (data.content ?? [])
+    .filter((b: any) => b.type === "text")
+    .map((b: any) => b.text)
+    .join("");
+  const parsed = picksFromText(text);
+  if (!parsed) throw new Error("Claude didn't list the picks it saw. Try a clearer screenshot.");
+  return { picks: cleanPicks(parsed), cost };
+}
+
+/** The {"picks": [...]} object from a plain-text reply (possibly inside a code block), or null. */
+export function picksFromText(text: string): { picks: unknown[] } | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const j = JSON.parse(text.slice(start, end + 1));
+    return Array.isArray(j?.picks) ? j : null;
+  } catch {
+    return null;
+  }
 }
 
 // ------------------------------------------------------- league and stat maps
