@@ -27,7 +27,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.3.2";
+export const VERSION = "0.3.3";
 
 export class Bot extends DurableObject<Env> {
   store: Store;
@@ -114,6 +114,10 @@ export class Bot extends DurableObject<Env> {
         roundRunningForMs: this.ticking ? Date.now() - this.tickStarted : 0,
         cooldownLeftS: e ? Math.max(0, Math.round(e.cooldownUntil - now)) : 0,
         kalshiRequests: e?.client.requests ?? 0,
+        kalshiOk: e?.client.ok ?? 0,
+        signed: !!(e?.client.key && e?.client.apiKeyId),
+        baseUrl: e?.client.baseUrl ?? null,
+        lastKalshiFailure: e?.client.lastFailure ?? null,
         priceRequests: e?.feed.requests ?? 0,
         cryptoSeries: e ? [...e.series.keys()] : [],
       },

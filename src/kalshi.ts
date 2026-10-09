@@ -134,6 +134,8 @@ export class KalshiClient {
   fetchFn: typeof fetch;
   requests = 0; // subrequests made, for staying under Workers limits
   timeoutMs = 8000; // never let one request hang a round
+  ok = 0;
+  lastFailure: Record<string, unknown> | null = null;
   private basePath: string;
 
   constructor(baseUrl: string, apiKeyId = "", key: SigningKey | null = null, fetchFn: typeof fetch = (...a) => fetch(...a)) {
@@ -169,7 +171,19 @@ export class KalshiClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
       const text = await resp.text();
-      if (resp.ok) return (text ? JSON.parse(text) : {}) as T;
+      if (resp.ok) {
+        this.ok++;
+        return (text ? JSON.parse(text) : {}) as T;
+      }
+      this.lastFailure = {
+        status: resp.status,
+        path,
+        signed: !!(this.key && this.apiKeyId),
+        retryAfter: resp.headers.get("retry-after"),
+        server: resp.headers.get("server"),
+        cfRay: resp.headers.get("cf-ray"),
+        at: new Date().toISOString(),
+      };
       const retryable = resp.status === 429 || resp.status >= 500;
       if (!retryable || i + 1 >= attempts) throw new KalshiError(resp.status, text);
       await new Promise((r) => setTimeout(r, 750));
