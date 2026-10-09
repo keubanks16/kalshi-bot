@@ -661,3 +661,67 @@ test("dashboard doesn't force-reload over unsaved form edits", () => {
   assert.equal(html.split('http-equiv="refresh"').length, 2);
   assert.ok(html.includes("editing()") && html.includes("location.reload()"));
 });
+
+// ------------------------------------------------------------ timeouts on live orders
+function timeoutError(): Error {
+  // Like the Workers runtime's AbortSignal.timeout() error: its message can't be changed.
+  const e = new Error("The operation was aborted due to timeout");
+  Object.defineProperty(e, "message", { value: e.message, writable: false });
+  e.name = "TimeoutError";
+  return e;
+}
+
+test("live taker order that times out but was placed on Kalshi is still recorded", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  (client as any).getBalance = async () => 500;
+  const sent: string[] = [];
+  (client as any).createOrder = async (_t: string, _s: string, count: number, _p: number, id: string) => {
+    sent.push(id);
+    throw timeoutError();
+  };
+  (client as any).findOrderByClientId = async (_t: string, id: string) =>
+    id === sent[0] ? { order_id: "late1", client_order_id: id, fill_count: 3, taker_fees_dollars: "0.05" } : null;
+  store.set("strategy_modes", JSON.stringify({ crypto: "live" }));
+  await engine.tick();
+  const live = store.openTrades().filter((t) => t.mode === "live");
+  assert.equal(live.length, 1, "the position Kalshi opened is tracked");
+  assert.equal(live[0].contracts, 3);
+  assert.equal(live[0].order_id, "late1");
+  assert.match(engine.lastError ?? "", /timed out.*tracked/);
+});
+
+test("live maker order that times out but was placed is tracked as resting", async () => {
+  const { engine, store, client, again } = liveMaker();
+  let id = "";
+  (client as any).createMakerOrder = async (_t: string, _s: string, _c: number, _p: number, _x: number, cid: string) => {
+    id = cid;
+    throw timeoutError();
+  };
+  (client as any).findOrderByClientId = async (_t: string, cid: string) => (cid === id ? { order_id: "o1", status: "resting", fill_count: 0 } : null);
+  await again();
+  assert.equal(store.restingOrders("live").length, 1);
+  assert.equal(store.restingOrders("live")[0].order_id, "o1");
+  assert.ok(store.openRisk("live") > 0, "its cost counts against live limits");
+  void engine;
+});
+
+test("live order with no reply and nothing on Kalshi is treated as not placed", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  (client as any).getBalance = async () => 500;
+  (client as any).createOrder = async () => {
+    throw timeoutError();
+  };
+  (client as any).findOrderByClientId = async () => null;
+  store.set("strategy_modes", JSON.stringify({ crypto: "live" }));
+  await engine.tick();
+  assert.equal(store.openTrades().filter((t) => t.mode === "live").length, 0);
+  assert.match(engine.lastError ?? "", /never placed/);
+});
+
+test("a timeout with a read-only message is reported, not turned into a crash about 'message'", async () => {
+  const { engine, client } = setup();
+  client.getMarketsPage = async () => {
+    throw timeoutError();
+  };
+  await assert.rejects(engine.tick(), (e: Error) => /while scanning markets: The operation was aborted due to timeout/.test(e.message) && !/read only/.test(e.message));
+});

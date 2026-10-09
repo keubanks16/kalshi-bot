@@ -191,8 +191,8 @@ export class Engine {
       const where = this.phase;
       this.phase = "idle";
       if (!(e instanceof KalshiError && e.status === 429)) {
-        (e as Error).message = `while ${where}: ${(e as Error).message}`;
-        throw e;
+        // Some errors (like a request timeout) have a read-only message, so wrap instead of editing it.
+        throw new Error(`while ${where}: ${(e as Error)?.message ?? String(e)}`, { cause: e });
       }
       // Back off 15s, 30s, 60s… up to 5 minutes, instead of hammering Kalshi.
       const wait = Math.min(300, 15 * 2 ** this.rateLimitStrikes++);
@@ -752,7 +752,9 @@ export class Engine {
     let placed: Order = {};
     if (mode !== "paper") {
       try {
-        placed = await this.client.createMakerOrder(m.ticker, o.side, contracts, o.price, expiresAt);
+        const sent = await this.sendOrReconcile(m.ticker, (id) => this.client.createMakerOrder(m.ticker, o.side, contracts, o.price, expiresAt, id));
+        if (!sent) return none;
+        placed = sent;
       } catch (e) {
         if (e instanceof KalshiError && e.status === 429) throw e;
         // Post-only orders are rejected if the price would cross; just skip this round.
@@ -916,6 +918,40 @@ export class Engine {
     this.closeOrder(r, "canceled");
   }
 
+  /**
+   * Send an order. If Kalshi rejects it, record why and return null. If the
+   * request fails without an answer (a timeout or dropped connection), Kalshi
+   * may still have placed it, so look it up by our client order id and carry
+   * on with it: real money must never sit in a position the bot isn't tracking.
+   */
+  private async sendOrReconcile(ticker: string, send: (clientOrderId: string) => Promise<Order>): Promise<Order | null> {
+    const clientOrderId = crypto.randomUUID();
+    try {
+      return await send(clientOrderId);
+    } catch (e) {
+      if (e instanceof KalshiError) {
+        if (e.status === 429) throw e;
+        this.lastError = `Order on ${ticker} rejected: ${e.message}`;
+        return null;
+      }
+      const why = (e as Error)?.message ?? String(e);
+      for (let i = 0; i < 2; i++) {
+        try {
+          const found = await this.client.findOrderByClientId(ticker, clientOrderId);
+          if (found) {
+            this.lastError = `Order on ${ticker} timed out (${why}) but Kalshi had placed it; it's tracked.`;
+            return found;
+          }
+          if (i === 0) await new Promise((r) => setTimeout(r, 1000));
+        } catch {
+          /* try once more, then give up */
+        }
+      }
+      this.lastError = `Order on ${ticker} got no reply (${why}) and Kalshi shows no such order, so it was most likely never placed.`;
+      return null;
+    }
+  }
+
   /** Place (or simulate) a buy within every limit. Returns contracts filled. */
   async buy(o: BuyOrder): Promise<number> {
     const m = o.market;
@@ -930,7 +966,8 @@ export class Engine {
     let orderId: string | null = null;
     if (mode !== "paper") {
       try {
-        const order = await this.client.createOrder(m.ticker, o.side, contracts, o.price);
+        const order = await this.sendOrReconcile(m.ticker, (id) => this.client.createOrder(m.ticker, o.side, contracts, o.price, id));
+        if (!order) return 0;
         orderId = order.order_id ?? null;
         filled = Math.floor(Number(order.fill_count_fp ?? order.fill_count ?? 0));
         fee = Number(order.taker_fees_dollars ?? 0) || takerFee(filled, o.price, this.s.takerFeeRate);

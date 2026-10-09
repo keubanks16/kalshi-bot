@@ -239,7 +239,7 @@ export class KalshiClient {
   }
 
   /** Buy with a limit at `price` dollars, immediate-or-cancel: fill now at that price or not at all. */
-  async createOrder(ticker: string, side: "yes" | "no", count: number, price: number): Promise<Order> {
+  async createOrder(ticker: string, side: "yes" | "no", count: number, price: number, clientOrderId: string = crypto.randomUUID()): Promise<Order> {
     const body = {
       ticker,
       side,
@@ -248,7 +248,7 @@ export class KalshiClient {
       type: "limit",
       [`${side}_price_dollars`]: price.toFixed(4),
       time_in_force: "immediate_or_cancel",
-      client_order_id: crypto.randomUUID(),
+      client_order_id: clientOrderId,
     };
     return (await this.request<{ order: Order }>("POST", "/portfolio/orders", undefined, body)).order ?? {};
   }
@@ -258,7 +258,7 @@ export class KalshiClient {
    * never pays the taker fee). Kalshi itself cancels it at `expiresAt` (unix
    * seconds), even if the bot stops running.
    */
-  async createMakerOrder(ticker: string, side: "yes" | "no", count: number, price: number, expiresAt: number): Promise<Order> {
+  async createMakerOrder(ticker: string, side: "yes" | "no", count: number, price: number, expiresAt: number, clientOrderId: string = crypto.randomUUID()): Promise<Order> {
     const body = {
       ticker,
       side,
@@ -270,9 +270,18 @@ export class KalshiClient {
       post_only: true,
       expiration_ts: Math.floor(expiresAt),
       cancel_order_on_pause: true,
-      client_order_id: crypto.randomUUID(),
+      client_order_id: clientOrderId,
     };
     return (await this.request<{ order: Order }>("POST", "/portfolio/orders", undefined, body)).order ?? {};
+  }
+
+  /**
+   * Find an order we sent by its client_order_id. Used when an order request
+   * times out: Kalshi may have placed it even though we never got the reply.
+   */
+  async findOrderByClientId(ticker: string, clientOrderId: string): Promise<Order | null> {
+    const d = await this.request<{ orders?: Order[] }>("GET", "/portfolio/orders", { ticker, limit: 100 });
+    return (d.orders ?? []).find((o) => o.client_order_id === clientOrderId) ?? null;
   }
 
   async getOrder(orderId: string): Promise<Order> {
