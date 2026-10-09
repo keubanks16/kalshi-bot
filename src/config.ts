@@ -152,7 +152,7 @@ export function loadSettings(env: Env): Settings {
     modelWeight: num(env, "MODEL_WEIGHT", 0.5),
 
     sportsEnabled: bool(env, "SPORTS_ENABLED", true),
-    sportsList: str(env, "SPORTS_LIST", "baseball_mlb,americanfootball_nfl,americanfootball_ncaaf,basketball_nba,icehockey_nhl")
+    sportsList: str(env, "SPORTS_LIST", "americanfootball_ncaaf")
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean),

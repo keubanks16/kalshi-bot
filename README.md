@@ -34,9 +34,9 @@ A bot can only find a good trade when it has a source of truth that's better tha
 - **Max AI spend per day** (default $2, editable with the other limits) caps the API bill. A forecast typically costs about $0.05–0.15.
 - If settled AI bets win less often than Claude predicted, trust in the AI is cut automatically, down to half.
 
-**4. Sports vs sportsbooks** (MLB, NFL, college football, NBA, NHL by default). It needs an `ODDS_API_KEY` secret from [the-odds-api.com](https://the-odds-api.com).
+**4. Sports vs sportsbooks** (college football only by default; set `SPORTS_LIST` to add MLB, NFL, NBA, NHL and others). It needs an `ODDS_API_KEY` secret from [the-odds-api.com](https://the-odds-api.com).
 
-- Every 30 minutes it reads Kalshi's single-game markets (`KXMLBGAME`, `KXNFLGAME`…) and the sportsbooks' moneyline odds for the same games.
+- Every 30 minutes it reads Kalshi's single-game markets (`KXNCAAFGAME`) and the sportsbooks' moneyline odds for the same games.
 - It removes each book's margin to get fair win probabilities. It uses Pinnacle (the sharpest book) when available, otherwise the median of the books.
 - It bets on the team (YES or NO) when Kalshi's price is at least 3¢ better than fair after fees. It only bets before the game starts, and only once per game.
 - Odds API credits are capped per day (`SPORTS_DAILY_CREDITS`, default 16, about 480 a month, which fits the free plan). The dashboard shows what's used and what's left.

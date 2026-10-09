@@ -43,7 +43,7 @@
 
     // Sports: Kalshi game prices vs sportsbook odds (needs the ODDS_API_KEY secret from the-odds-api.com)
     "SPORTS_ENABLED": "true",
-    "SPORTS_LIST": "baseball_mlb,americanfootball_nfl,americanfootball_ncaaf,basketball_nba,icehockey_nhl",
+    "SPORTS_LIST": "americanfootball_ncaaf", // college football only; add more Odds API keys (comma-separated) to widen
     "SPORTS_MIN_EDGE": "0.03",
     "SPORTS_INTERVAL_MINUTES": "30",
     "SPORTS_REGIONS": "eu,us",      // eu includes Pinnacle; each region costs 1 credit per sport per check
