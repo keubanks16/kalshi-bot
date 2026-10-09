@@ -151,8 +151,8 @@ export function loadSettings(env: Env): Settings {
 
     aiEnabled: bool(env, "AI_ENABLED", true),
     aiModel: str(env, "AI_MODEL", "claude-sonnet-5-5"),
-    aiMinEdge: num(env, "AI_MIN_EDGE", 0.1),
-    aiIntervalMinutes: num(env, "AI_INTERVAL_MINUTES", 10),
+    aiMinEdge: num(env, "AI_MIN_EDGE", 0.05),
+    aiIntervalMinutes: num(env, "AI_INTERVAL_MINUTES", 30),
     aiRefreshHours: num(env, "AI_REFRESH_HOURS", 6),
     aiMinVolume: num(env, "AI_MIN_VOLUME", 1000),
     aiMinHoursToClose: num(env, "AI_MIN_HOURS_TO_CLOSE", 2),
