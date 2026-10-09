@@ -127,6 +127,36 @@ export interface Order {
   [k: string]: unknown;
 }
 
+interface V2OrderReply {
+  order_id?: string;
+  client_order_id?: string;
+  fill_count?: string;
+  remaining_count?: string;
+  average_fill_price?: string;
+  average_fee_paid?: string; // per contract
+}
+
+/** V2 side and price for buying `side` at `price` dollars (V2 prices are always YES prices). */
+export function v2Side(side: "yes" | "no", price: number): { side: "bid" | "ask"; price: string } {
+  const yesPrice = side === "yes" ? price : 1 - price;
+  return { side: side === "yes" ? "bid" : "ask", price: (Math.round(yesPrice * 10000) / 10000).toFixed(4) };
+}
+
+/** A V2 create-order reply in the shape the engine reads (fills, fees, status). */
+export function fromV2(r: V2OrderReply, count: number, timeInForce: string): Order {
+  const filled = Math.floor(Number(r.fill_count ?? 0)) || 0;
+  const remaining = Number(r.remaining_count ?? count - filled);
+  const fee = filled > 0 && r.average_fee_paid !== undefined ? Number(r.average_fee_paid) * filled : undefined;
+  const status = remaining > 0 && timeInForce === "good_till_canceled" ? "resting" : filled > 0 && remaining <= 0 ? "executed" : "canceled";
+  return {
+    ...r,
+    order_id: r.order_id,
+    fill_count_fp: String(filled),
+    ...(fee !== undefined ? { taker_fees_dollars: fee.toFixed(4) } : {}),
+    status,
+  };
+}
+
 /** Contracts filled so far on an order. */
 export function orderFilled(o: Order): number {
   return Math.floor(Number(o.fill_count_fp ?? o.fill_count ?? 0)) || 0;
@@ -238,19 +268,36 @@ export class KalshiClient {
     return (d.balance ?? 0) / 100;
   }
 
-  /** Buy with a limit at `price` dollars, immediate-or-cancel: fill now at that price or not at all. */
-  async createOrder(ticker: string, side: "yes" | "no", count: number, price: number, clientOrderId: string = crypto.randomUUID()): Promise<Order> {
+  /**
+   * Send a buy through Kalshi's V2 order endpoint (the v1 one is retired).
+   * V2 quotes everything from the YES side: buying YES is a "bid" at the YES
+   * price; buying NO is an "ask" (sell YES) at 1 − the NO price. The reply is
+   * turned back into the order shape the rest of the bot reads.
+   */
+  private async placeV2(
+    ticker: string,
+    side: "yes" | "no",
+    count: number,
+    price: number,
+    clientOrderId: string,
+    extra: Record<string, unknown>,
+  ): Promise<Order> {
+    const contracts = Math.floor(count);
     const body = {
       ticker,
-      side,
-      action: "buy",
-      count: Math.floor(count),
-      type: "limit",
-      [`${side}_price_dollars`]: price.toFixed(4),
-      time_in_force: "immediate_or_cancel",
+      ...v2Side(side, price),
+      count: contracts.toFixed(2),
+      self_trade_prevention_type: "taker_at_cross",
       client_order_id: clientOrderId,
+      ...extra,
     };
-    return (await this.request<{ order: Order }>("POST", "/portfolio/orders", undefined, body)).order ?? {};
+    const r = await this.request<V2OrderReply>("POST", "/portfolio/events/orders", undefined, body);
+    return fromV2(r, contracts, String(extra.time_in_force));
+  }
+
+  /** Buy with a limit at `price` dollars, immediate-or-cancel: fill now at that price or not at all. */
+  async createOrder(ticker: string, side: "yes" | "no", count: number, price: number, clientOrderId: string = crypto.randomUUID()): Promise<Order> {
+    return this.placeV2(ticker, side, count, price, clientOrderId, { time_in_force: "immediate_or_cancel" });
   }
 
   /**
@@ -259,20 +306,12 @@ export class KalshiClient {
    * seconds), even if the bot stops running.
    */
   async createMakerOrder(ticker: string, side: "yes" | "no", count: number, price: number, expiresAt: number, clientOrderId: string = crypto.randomUUID()): Promise<Order> {
-    const body = {
-      ticker,
-      side,
-      action: "buy",
-      count: Math.floor(count),
-      type: "limit",
-      [`${side}_price_dollars`]: price.toFixed(4),
+    return this.placeV2(ticker, side, count, price, clientOrderId, {
       time_in_force: "good_till_canceled",
       post_only: true,
-      expiration_ts: Math.floor(expiresAt),
+      expiration_time: Math.floor(expiresAt),
       cancel_order_on_pause: true,
-      client_order_id: clientOrderId,
-    };
-    return (await this.request<{ order: Order }>("POST", "/portfolio/orders", undefined, body)).order ?? {};
+    });
   }
 
   /**
@@ -289,9 +328,11 @@ export class KalshiClient {
   }
 
   /** Cancel a resting order. Returns the order as it ended (with its final fill count) when Kalshi sends it. */
-  async cancelOrder(orderId: string): Promise<Order | null> {
-    const d = await this.request<{ order?: Order }>("DELETE", `/portfolio/orders/${orderId}`);
-    return d.order ?? null;
+  async cancelOrder(orderId: string, ticker?: string): Promise<Order | null> {
+    // V2 cancel replies with only the amount cancelled, not the order, so
+    // return null and let the caller read the final order (with its fills).
+    await this.request("DELETE", `/portfolio/events/orders/${orderId}`, { market_ticker: ticker });
+    return null;
   }
 }
 

@@ -892,7 +892,7 @@ export class Engine {
   async cancelResting(r: OrderRow, now: number): Promise<void> {
     if (r.mode !== "paper") {
       try {
-        const final = (await this.client.cancelOrder(r.order_id!)) ?? (await this.client.getOrder(r.order_id!));
+        const final = (await this.client.cancelOrder(r.order_id!, r.ticker)) ?? (await this.client.getOrder(r.order_id!));
         this.syncOrder(r, { ...final, status: "canceled" }, now);
         return;
       } catch (e) {
