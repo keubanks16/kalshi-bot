@@ -114,3 +114,14 @@ test("picks the side that clears its own bar, not just the larger edge", () => {
   const d = decideBinary(0.3, 0.2, 0.45, 100, { ...strict, minPrice: 0.05 });
   assert.notEqual(d.action, "buy_yes");
 });
+
+test("one-contract minimum: a good edge on a small bankroll still buys 1", () => {
+  // $10 bankroll, quarter-Kelly sizes this to well under one contract
+  const tiny = { ...limits, minEdge: 0.04 };
+  assert.equal(decideBinary(0.6, 0.5, 0.52, 10, tiny).action, "hold");
+  const d = decideBinary(0.6, 0.5, 0.52, 10, { ...tiny, minOneContract: true });
+  assert.equal(d.action, "buy_yes");
+  assert.equal(d.contracts, 1);
+  // still needs the edge
+  assert.equal(decideBinary(0.51, 0.5, 0.52, 10, { ...tiny, minOneContract: true }).action, "hold");
+});

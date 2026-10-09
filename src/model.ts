@@ -109,6 +109,8 @@ export interface BinaryLimits {
   /** Contracts priced below this need at least cheapMinEdge (long shots are where the model is least reliable). */
   cheapBelow?: number;
   cheapMinEdge?: number;
+  /** Buy at least one contract when the edge clears the bar but the sized bet is under one contract. */
+  minOneContract?: boolean;
 }
 
 /** The edge a side must clear at this ask: stricter for cheap long shots when configured. */
@@ -143,7 +145,8 @@ export function decideBinary(pYes: number, yesAsk: number | null, noAsk: number 
   const extra = { price: best.ask, edge: best.edge };
 
   const spend = s.kellyFraction * kellyFraction(best.prob, best.ask) * bankroll;
-  const contracts = Math.min(Math.floor(spend / best.ask), s.maxContractsPerOrder);
+  let contracts = Math.min(Math.floor(spend / best.ask), s.maxContractsPerOrder);
+  if (contracts < 1 && s.minOneContract && s.maxContractsPerOrder >= 1) contracts = 1;
   if (contracts < 1) return hold(`edge ${fmtEdge(best.edge)} but size rounds to 0`, extra);
   return { action: best.side === "yes" ? "buy_yes" : "buy_no", reason: `edge ${fmtEdge(best.edge)}`, contracts, pYes, ...extra };
 }

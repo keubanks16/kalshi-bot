@@ -240,6 +240,13 @@ ${s.limits.length ? `<div class="k" style="margin-top:22px">Shared</div>${limitF
 
   const botBody = `<div class="card"><div class="k">Now</div><div>${esc(s.status)}</div>
 ${s.problem ? `<div class="err">${esc(s.problem)}</div>` : ""}
+${
+  s.kalshiCash
+    ? `<div class="sub" style="margin-top:8px">Kalshi cash available to the bot: <b>${s.kalshiCash.value === null ? "not read yet" : `$${s.kalshiCash.value.toFixed(2)}`}</b>${
+        s.kalshiCash.at ? ` (checked ${esc(time(s.kalshiCash.at))})` : ""
+      }${s.kalshiCash.error ? ` · couldn't read it: ${esc(s.kalshiCash.error)}` : ""}</div>`
+    : ""
+}
 ${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
 
 ${modeCard}

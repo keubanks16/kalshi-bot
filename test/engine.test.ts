@@ -781,3 +781,46 @@ test("a skipped bet says exactly why: which limit, or what Kalshi said", async (
   const why2 = b.store.recentDecisions(5).map((d: any) => d.reason).join(" | ");
   assert.match(why2, /not posted: Order on .* rejected: .*post_only_cross/);
 });
+
+test("live bets fit the cash Kalshi has available, and skip with a clear reason when even 1 contract doesn't", async () => {
+  const a = liveMaker();
+  (a.client as any).getBalance = async () => 0.3;
+  await a.again();
+  assert.equal(a.calls.filter((c) => c.startsWith("post")).length, 0, "nothing sent that Kalshi would reject");
+  assert.match(a.store.recentDecisions(5).map((d: any) => d.reason).join(" | "), /not posted: not enough cash in Kalshi \(\$0\.30 available/);
+
+  const b = liveMaker();
+  (b.client as any).getBalance = async () => 1.2;
+  await b.again();
+  const post = b.calls.find((c) => c.startsWith("post"))!;
+  const n = Number(post.split(" ")[3]);
+  assert.ok(n >= 1 && n * 0.54 <= 1.2, `order fits $1.20 of cash: ${post}`);
+
+  // cash shrinks an order the limits would otherwise allow
+  const c = liveMaker();
+  let reads = 0;
+  (c.client as any).getBalance = async () => (++reads <= 1 ? 1.2 : 500); // tight cash, but bankroll sizing sees plenty
+  (c.engine as any).bankroll = async () => 500;
+  await c.again();
+  const post2 = c.calls.find((x) => x.startsWith("post"));
+  if (post2) assert.ok(Number(post2.split(" ")[3]) * 0.54 <= 1.2 + 1e-9, post2);
+});
+
+test("dashboard shows Kalshi cash while something is live", async () => {
+  const a = liveMaker();
+  (a.client as any).getBalance = async () => 59.73;
+  await a.again();
+  assert.equal(a.engine.kalshiCash?.value, 59.73);
+  const row = (key: string, value: number) => ({ key, label: key, help: "", value, dflt: value });
+  const html = renderDashboard(
+    {
+      mode: "live", problem: null, status: "ok", lastError: null, alive: true, killSwitch: false, horizon: "day",
+      horizons: [{ key: "day", label: "Within a day" }] as any, limits: [row("aiDailyBudget", 2)],
+      kalshiCash: { value: 59.73, at: NOW, error: null },
+      summary: { trades: 0, settled: 0, wins: 0, pnl: 0, fees: 0, openCost: 0 }, today: 0,
+      byStrategy: [], trades: [], decisions: [], timezone: "America/New_York", diag: {},
+    } as any,
+    { authed: true, passwordSet: true },
+  );
+  assert.ok(html.includes("Kalshi cash available to the bot: <b>$59.73</b>"));
+});

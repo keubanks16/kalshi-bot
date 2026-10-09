@@ -7,7 +7,7 @@
 // Work per tick is capped so it fits Cloudflare's per-invocation subrequest
 // limit; the full market list is covered over several ticks.
 
-import { HORIZONS, MODE_LIMIT_FIELDS, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, limitSetOf, type Limits, type Mode, type Settings, type Strategy } from "./config.ts";
+import { HORIZONS, MODE_LIMIT_FIELDS, STRATEGIES, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, limitSetOf, type Limits, type Mode, type Settings, type Strategy } from "./config.ts";
 import { KalshiClient, KalshiError, askSize, dollars, makerQuotes, orderFilled, seriesOf, ts, type Market, type Order } from "./kalshi.ts";
 import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, requiredEdge, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
 import type { PriceFeed } from "./prices.ts";
@@ -221,6 +221,11 @@ export class Engine {
       }
       this.status = "Paused — kill switch is on";
       return;
+    }
+    // Keep the dashboard's Kalshi cash figure current while anything trades live.
+    if (STRATEGIES.some((st) => this.modeFor(st) !== "paper")) {
+      this.phase = "reading Kalshi balance";
+      await this.availableCash();
     }
     this.phase = "checking resting orders";
     await this.manageOrders(now);
@@ -715,6 +720,36 @@ export class Engine {
     return { room: Math.max(0, room), limit };
   }
 
+  /** Available cash in the Kalshi account as of the last check (live only), for the dashboard. */
+  kalshiCash: { value: number; at: number } | null = null;
+  kalshiCashError: string | null = null;
+  private cashStale = false;
+
+  /** Available Kalshi cash, re-read at most every 20s and right after any order. Null if it can't be read. */
+  async availableCash(): Promise<number | null> {
+    const now = this.clock();
+    if (this.kalshiCash && !this.cashStale && now - this.kalshiCash.at < 20) return this.kalshiCash.value;
+    try {
+      this.kalshiCash = { value: await this.client.getBalance(), at: now };
+      this.cashStale = false;
+      this.kalshiCashError = null;
+      return this.kalshiCash.value;
+    } catch (e) {
+      if (e instanceof KalshiError && e.status === 429) throw e;
+      this.kalshiCashError = (e as Error)?.message ?? String(e);
+      return null;
+    }
+  }
+
+  /** Shrink a live order to the cash Kalshi has available; 0 (with a reason) if not even one contract fits. */
+  private async fitToCash(contracts: number, price: number, feeRate: number): Promise<number> {
+    const cash = await this.availableCash();
+    if (cash === null) return contracts; // can't tell; let Kalshi decide
+    const fit = fitToRoom(contracts, price, cash, feeRate);
+    if (fit < 1) this.skipWhy = `not enough cash in Kalshi ($${cash.toFixed(2)} available, 1 contract costs about $${(price + takerFee(1, price, feeRate)).toFixed(2)})`;
+    return fit;
+  }
+
   /** Why the last buy()/placeMaker() call placed nothing, in plain words for the log. */
   private skipWhy = "";
   private blockedBy(eventTicker: string, ticker: string, mode: Mode, price: number): string {
@@ -753,8 +788,13 @@ export class Engine {
     const none = { filled: 0, resting: 0 };
     this.skipWhy = "";
     if (this.store.openSides(m.ticker, mode).some((side) => side !== o.side)) return (this.skipWhy = "already holding the other side"), none;
-    const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.makerFeeRate);
+    let contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.makerFeeRate);
     if (contracts < 1) return (this.skipWhy = this.blockedBy(m.event_ticker, m.ticker, mode, o.price)), none;
+    if (mode !== "paper") {
+      const fit = await this.fitToCash(contracts, o.price, this.s.makerFeeRate);
+      if (fit < 1) return none;
+      contracts = fit;
+    }
 
     const now = this.clock();
     const close = ts(m.close_time);
@@ -964,6 +1004,7 @@ export class Engine {
    */
   private async sendOrReconcile(ticker: string, send: (clientOrderId: string) => Promise<Order>): Promise<Order | null> {
     const clientOrderId = crypto.randomUUID();
+    this.cashStale = true; // any order changes available cash; re-read before the next bet
     try {
       return await send(clientOrderId);
     } catch (e) {
@@ -997,8 +1038,13 @@ export class Engine {
     this.skipWhy = "";
     // Never bet against our own open position on the same market.
     if (this.store.openSides(m.ticker, mode).some((side) => side !== o.side)) return (this.skipWhy = "already holding the other side"), 0;
-    const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.takerFeeRate);
+    let contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.takerFeeRate);
     if (contracts < 1) return (this.skipWhy = this.blockedBy(m.event_ticker, m.ticker, mode, o.price)), 0;
+    if (mode !== "paper") {
+      const fit = await this.fitToCash(contracts, o.price, this.s.takerFeeRate);
+      if (fit < 1) return 0;
+      contracts = fit;
+    }
 
     let filled: number;
     let fee: number;
