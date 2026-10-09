@@ -73,7 +73,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.11.0";
+export const VERSION = "0.11.1";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 

@@ -533,6 +533,44 @@ test("maker (live): an order Kalshi already removed stops reserving limits, and 
   assert.equal(calls.filter((c) => c.startsWith("post")).length, 2, "re-posted after the unfilled order went away");
 });
 
+test("maker (live): when Kalshi says an order is gone, its fills record decides what was bought", async () => {
+  const { store, again, calls, client } = liveMaker();
+  await again();
+  (client as any).getOrder = async (id: string) => {
+    calls.push(`get ${id}`);
+    throw new KalshiError(404, '{"error":{"code":"not_found"}}');
+  };
+  (client as any).getOrderFills = async (id: string) => {
+    calls.push(`fills ${id}`);
+    return { filled: 2, fees: 0.02 };
+  };
+  await again(5);
+  assert.ok(calls.includes("fills o1"));
+  const trades = store.openTrades().filter((t) => t.mode === "live");
+  assert.equal(trades.length, 1, "the filled contracts are tracked, not lost");
+  assert.equal(trades[0].contracts, 2);
+  assert.equal(trades[0].fee, 0.02);
+  assert.equal(store.restingOrders("live").length, 0);
+});
+
+test("maker (live): a cancel that can't reach the order still books fills once Kalshi's expiry passes", async () => {
+  const { store, again, calls, client } = liveMaker();
+  await again();
+  (client as any).cancelOrder = async (id: string) => {
+    calls.push(`cancel ${id}`);
+    throw new KalshiError(404, '{"error":{"code":"not_found"}}');
+  };
+  (client as any).getOrder = async (id: string) => {
+    calls.push(`get ${id}`);
+    throw new Error("network");
+  };
+  (client as any).getOrderFills = async () => ({ filled: 1, fees: 0.01 });
+  await again(130);
+  assert.ok(calls.includes("cancel o1"));
+  assert.equal(store.openTrades().filter((t) => t.mode === "live").length, 1);
+  assert.equal(store.restingOrders("live").length, 0);
+});
+
 test("maker: an expired, unfilled bid doesn't use up the market's one order", async () => {
   const { store, again } = makerSetup();
   await again();

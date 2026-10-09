@@ -61,3 +61,27 @@ test("cancel uses the V2 endpoint with the market for routing, then the caller r
   assert.equal(calls[0].method, "DELETE");
   assert.match(calls[0].url, /\/portfolio\/events\/orders\/m1\?market_ticker=KXNCAAFGAME-Y$/);
 });
+
+test("cancel falls back to the older endpoint when V2 says not found", async () => {
+  const calls: string[] = [];
+  const fetchFn = (async (url: string, init: RequestInit) => {
+    calls.push(`${init.method} ${new URL(url).pathname}`);
+    if (url.includes("/portfolio/events/orders/")) return new Response('{"error":{"code":"not_found"}}', { status: 404 });
+    return new Response(JSON.stringify({ order: { order_id: "m1", status: "canceled", fill_count_fp: "2.00" } }));
+  }) as unknown as typeof fetch;
+  const client = new KalshiClient("https://example.test/trade-api/v2", "", null, fetchFn);
+  const o = await client.cancelOrder("m1", "T");
+  assert.deepEqual(calls, ["DELETE /trade-api/v2/portfolio/events/orders/m1", "DELETE /trade-api/v2/portfolio/orders/m1"]);
+  assert.equal(orderFilled(o!), 2);
+});
+
+test("fills record: sums contracts and fees for one order", async () => {
+  let url = "";
+  const fetchFn = (async (u: string) => {
+    url = u;
+    return new Response(JSON.stringify({ fills: [{ order_id: "o1", count_fp: "2.00", fee_cost: "0.0100" }, { order_id: "o1", count_fp: "1.00", fee_cost: "0.0050" }, { order_id: "other", count_fp: "9.00", fee_cost: "1" }] }));
+  }) as unknown as typeof fetch;
+  const client = new KalshiClient("https://example.test/trade-api/v2", "", null, fetchFn);
+  assert.deepEqual(await client.getOrderFills("o1", "T"), { filled: 3, fees: 0.015 });
+  assert.match(url, /\/portfolio\/fills\?order_id=o1&ticker=T&limit=1000$/);
+});

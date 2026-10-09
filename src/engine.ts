@@ -848,6 +848,22 @@ export class Engine {
     });
   }
 
+  /**
+   * Kalshi says the order is gone (filled, expired or cancelled). Its fills
+   * record is the truth about what we bought, so book those before closing:
+   * real money must never sit in a position the bot isn't tracking.
+   */
+  private async closeFromFills(row: OrderRow, now: number): Promise<void> {
+    try {
+      const f = await this.client.getOrderFills(row.order_id!, row.ticker);
+      this.recordFill(row, Math.min(row.count, f.filled), f.filled > 0 ? f.fees : null, now);
+    } catch (e) {
+      if (e instanceof KalshiError && e.status === 429) throw e;
+      this.lastError = `Order on ${row.ticker} is gone and its fills couldn't be read (${(e as Error).message}); check Kalshi for a position.`;
+    }
+    this.closeOrder(row, "canceled");
+  }
+
   private closeOrder(row: OrderRow, status: "filled" | "canceled"): void {
     row.status = row.filled >= row.count ? "filled" : status;
     this.store.updateOrder(row.id, row.filled, row.fee_paid, row.status);
@@ -878,9 +894,12 @@ export class Engine {
           this.syncOrder(r, await this.client.getOrder(r.order_id!), now);
         } catch (e) {
           if (e instanceof KalshiError && e.status === 429) throw e;
-          if (e instanceof KalshiError && e.status === 404) this.closeOrder(r, "canceled");
-          else this.lastError = `Checking order on ${r.ticker} failed: ${(e as Error).message}`;
-          continue;
+          if (e instanceof KalshiError && e.status === 404) {
+            await this.closeFromFills(r, now);
+            continue;
+          }
+          // Couldn't read it this round; still cancel it below if it's due.
+          this.lastError = `Checking order on ${r.ticker} failed: ${(e as Error).message}`;
         }
         if (r.status !== "resting") continue;
       }
@@ -907,11 +926,14 @@ export class Engine {
           }
         } catch {
           // Can't reach it; Kalshi's own expiry still cancels it. Stop reserving
-          // limits for it only once that expiry has passed.
+          // limits for it only once that expiry has passed, and book whatever
+          // Kalshi's fills record says filled first.
           if (now < r.expires_ts) {
             this.lastError = `Couldn't cancel order on ${r.ticker}: ${(e as Error).message}. Kalshi will expire it.`;
             return;
           }
+          await this.closeFromFills(r, now);
+          return;
         }
       }
     }

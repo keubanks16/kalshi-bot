@@ -331,8 +331,29 @@ export class KalshiClient {
   async cancelOrder(orderId: string, ticker?: string): Promise<Order | null> {
     // V2 cancel replies with only the amount cancelled, not the order, so
     // return null and let the caller read the final order (with its fills).
-    await this.request("DELETE", `/portfolio/events/orders/${orderId}`, { market_ticker: ticker });
-    return null;
+    try {
+      await this.request("DELETE", `/portfolio/events/orders/${orderId}`, { market_ticker: ticker });
+      return null;
+    } catch (e) {
+      // "Not found" from V2 can mean it routed the cancel wrong; the older
+      // cancel endpoint is still live, so try it before giving up.
+      if (!(e instanceof KalshiError && e.status === 404)) throw e;
+      const d = await this.request<{ order?: Order }>("DELETE", `/portfolio/orders/${orderId}`);
+      return d.order ?? null;
+    }
+  }
+
+  /** What actually filled on an order, from Kalshi's fills record (works even after the order is gone). */
+  async getOrderFills(orderId: string, ticker?: string): Promise<{ filled: number; fees: number }> {
+    const d = await this.request<{ fills?: Record<string, unknown>[] }>("GET", "/portfolio/fills", { order_id: orderId, ticker, limit: 1000 });
+    let filled = 0;
+    let fees = 0;
+    for (const f of d.fills ?? []) {
+      if (f.order_id !== undefined && f.order_id !== orderId) continue;
+      filled += Number(f.count_fp ?? f.count ?? 0) || 0;
+      fees += Number(f.fee_cost ?? 0) || 0;
+    }
+    return { filled: Math.floor(filled + 1e-9), fees: Math.round(fees * 10000) / 10000 };
   }
 }
 
