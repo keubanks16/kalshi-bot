@@ -51,7 +51,7 @@ The dollar limits below can be changed any time from the dashboard's **Spending 
 | Max spent per event | $20 |
 | Max total money in open trades | $50 |
 | Daily loss limit (losses + money at risk) | $25 |
-| Max orders per market | 3 |
+| Max orders per market | 1 (never adds to a position) |
 | Bankroll used for sizing | $100, even if your account holds more |
 | Orders | Limit at the ask, immediate-or-cancel. Never resting, never chasing |
 | Kill switch | One button on the dashboard |

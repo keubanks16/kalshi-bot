@@ -113,7 +113,7 @@ export function loadSettings(env: Env): Settings {
     maxCostPerEvent: num(env, "MAX_COST_PER_EVENT", 20),
     maxOpenRisk: num(env, "MAX_OPEN_RISK", 50),
     maxDailyLoss: num(env, "MAX_DAILY_LOSS", 25),
-    maxOrdersPerMarket: num(env, "MAX_ORDERS_PER_MARKET", 3),
+    maxOrdersPerMarket: num(env, "MAX_ORDERS_PER_MARKET", 1),
   };
 }
 

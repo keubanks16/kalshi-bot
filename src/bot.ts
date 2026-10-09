@@ -25,6 +25,7 @@ export interface Snapshot {
   horizons: { key: string; label: string; short: string }[];
   limits: { key: string; label: string; help: string; value: number; dflt: number }[];
   modelWeight?: { value: number; dflt: number; options: number[] };
+  modelCheck?: { settled: number; expectedWins: number; actualWins: number; avgPrice: number };
   summary: ReturnType<Store["summary"]>;
   today: number;
   byStrategy: { strategy: string; trades: number; pnl: number }[];
@@ -34,7 +35,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.5.0";
+export const VERSION = "0.5.1";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
@@ -132,6 +133,7 @@ export class Bot extends DurableObject<Env> {
       summary: this.store.summary(view),
       today: this.store.pnlForDay(tradingDay(now, tz), view),
       byStrategy: this.store.byStrategy(view),
+      modelCheck: this.store.modelCheck(view),
       trades: this.store.recentTrades(view, 30),
       decisions: this.store.recentDecisions(25),
       timezone: tz,

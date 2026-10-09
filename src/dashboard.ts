@@ -60,6 +60,24 @@ export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwor
         .join("")
     : `<tr><td colspan="2" class="sub">Nothing logged yet.</td></tr>`;
 
+  const mc = s.modelCheck;
+  const check =
+    mc && mc.settled > 0
+      ? (() => {
+          const diff = mc.actualWins - mc.expectedWins;
+          const verdict =
+            mc.settled < 50
+              ? "Too few trades to judge yet — check back after 50+."
+              : diff >= 0
+                ? "Winning at least as often as the model expected."
+                : "Winning less often than the model expected: it's likely overconfident.";
+          return `<div class="card"><div class="k">Model check (crypto)</div>
+<div class="row2"><span>Expected wins</span><b>${mc.expectedWins.toFixed(1)}</b></div>
+<div class="row2"><span>Actual wins</span><b class="${diff >= 0 ? "up" : "down"}">${mc.actualWins} of ${mc.settled}</b></div>
+<div class="sub" style="margin-top:6px">${esc(verdict)} The model only has an edge if actual wins keep beating expected.</div></div>`;
+        })()
+      : "";
+
   const strat = s.byStrategy.length
     ? s.byStrategy.map((b) => `<span>${esc(STRATEGY[b.strategy] ?? b.strategy)}: ${b.trades} trades, <b class="${cls(b.pnl)}">${esc(money(b.pnl))}</b></span>`).join(" · ")
     : "";
@@ -163,6 +181,7 @@ details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px
 .check input{width:auto;margin:3px 0 0}
 .views{margin-top:16px}.views a{flex:1;text-align:center;padding:9px 6px;border:1px solid var(--line);border-radius:10px;color:var(--ink);text-decoration:none;font-size:13px;font-weight:600}
 .views a.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.row2{display:flex;justify-content:space-between;padding:4px 0}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .top form{margin:0}button.link{background:none;color:var(--accent);padding:6px 0;width:auto;font-weight:600;font-size:14px}
 .strat{font-size:13px;color:var(--mute);margin-top:4px}.strat b{font-weight:600}
@@ -194,6 +213,7 @@ ${viewSwitch}
  <div class="card"><div class="k">Open risk</div><div class="v">$${sum.openCost.toFixed(2)}</div><div class="sub">fees paid $${sum.fees.toFixed(2)}</div></div>
 </div>
 ${strat ? `<div class="strat">${strat}</div>` : ""}
+${check}
 
 ${
   opts.authed

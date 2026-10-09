@@ -252,6 +252,30 @@ test("dashboard: go-live form for paper, switch-back for live, results tabs", ()
   assert.ok(!signedOut.includes("Go live"));
 });
 
+test("model check counts expected vs actual wins", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  await engine.tick();
+  client.all[0].result = "yes";
+  await engine.settle();
+  const mc = store.modelCheck("paper");
+  assert.equal(mc.settled, 1);
+  assert.equal(mc.actualWins, 1);
+  assert.ok(mc.expectedWins > 0.5 && mc.expectedWins < 1);
+  const html = renderDashboard({ ...({} as any), mode: "paper", problem: null, status: "", lastError: null, alive: true, killSwitch: false,
+    horizon: "day", horizons: [], limits: [], summary: store.summary("paper"), today: 0, byStrategy: store.byStrategy("paper"),
+    trades: [], decisions: [], timezone: "America/New_York", diag: {}, modelCheck: mc }, { authed: false, passwordSet: true });
+  assert.ok(html.includes("Model check") && html.includes("1 of 1"));
+});
+
+test("only one bet per market by default", async () => {
+  const { engine, store } = setup({ ARB_ENABLED: "false" });
+  for (let i = 0; i < 5; i++) {
+    engine.series.forEach((st) => (st.nextCheck = 0));
+    await engine.tick();
+  }
+  assert.equal(store.marketExposure("KXBTCD-26OCT0911-T80000", "paper").orders, 1);
+});
+
 test("15-minute limit skips markets closing later", async () => {
   const { engine, store } = setup();
   store.set("horizon", "15m");
@@ -285,7 +309,7 @@ test("limits hold over many ticks", async () => {
   assert.ok(store.openRisk("paper") <= 50 + 1e-9);
   for (const t of new Set(store.openTrades().map((t) => t.ticker))) {
     const ex = store.marketExposure(t, "paper");
-    assert.ok(ex.orders <= 3 && ex.cost <= 10 + 1e-9, `${t}: ${JSON.stringify(ex)}`);
+    assert.ok(ex.orders <= 1 && ex.cost <= 10 + 1e-9, `${t}: ${JSON.stringify(ex)}`);
   }
   assert.ok(store.eventExposure("KXFEDDEC-26", "paper") <= 20 + 1e-9);
 });

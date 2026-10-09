@@ -154,6 +154,17 @@ export class Store {
   pnlForDay(day: string, mode: string): number {
     return Number(this.one<{ p: number }>("SELECT COALESCE(SUM(pnl), 0) AS p FROM trades WHERE day = ? AND mode = ? AND result IS NOT NULL", day, mode).p);
   }
+  /** How many crypto bets the model expected to win vs how many did. */
+  modelCheck(mode: string): { settled: number; expectedWins: number; actualWins: number; avgPrice: number } {
+    const r = this.one(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(p_fair), 0) AS exp,
+              COALESCE(SUM(CASE WHEN result = side THEN 1 ELSE 0 END), 0) AS won,
+              COALESCE(AVG(price), 0) AS px
+       FROM trades WHERE mode = ? AND strategy = 'crypto' AND result IS NOT NULL AND p_fair IS NOT NULL`,
+      mode,
+    );
+    return { settled: Number(r.n), expectedWins: Number(r.exp), actualWins: Number(r.won), avgPrice: Number(r.px) };
+  }
   byStrategy(mode: string): { strategy: string; trades: number; pnl: number }[] {
     return this.rows("SELECT strategy, COUNT(*) AS trades, COALESCE(SUM(pnl), 0) AS pnl FROM trades WHERE mode = ? GROUP BY strategy", mode) as any;
   }
