@@ -98,7 +98,8 @@ export class Engine {
     try {
       saved = JSON.parse(this.store.get("limits") ?? "{}");
     } catch {}
-    this.s = { ...this.base, ...cleanLimits(saved) };
+    const w = Number(this.store.get("model_weight"));
+    this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}) };
   }
 
   async tick(): Promise<void> {

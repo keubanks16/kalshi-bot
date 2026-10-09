@@ -68,6 +68,18 @@ export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwor
         .join("")}</form>`
     : `<div class="v small">${esc(horizonLabel)}</div>`;
 
+  const mw = s.modelWeight;
+  const pct = (w: number) => `${Math.round(w * 100)}%`;
+  const modelCard = !mw
+    ? ""
+    : `<div class="card"><div class="k">Trust in the crypto model</div>${
+        opts.authed
+          ? `<form method="post" action="/model" class="seg">${mw.options
+              .map((w) => `<button name="weight" value="${w}" class="${Math.abs(w - mw.value) < 1e-9 ? "on" : ""}">${pct(w)}</button>`)
+              .join("")}</form>`
+          : `<div class="v small">${pct(mw.value)}</div>`
+      }<div class="sub" style="margin-top:8px">Lower blends its estimate more toward the market's price, so it trades less and only on bigger disagreements. 100% trusts the model alone. Default ${pct(mw.dflt)}.</div></div>`;
+
   const limitsCard = opts.authed
     ? `<form method="post" action="/limits" class="limits">${s.limits
         .map(
@@ -126,6 +138,8 @@ ${s.problem ? `<div class="err">${esc(s.problem)}</div>` : ""}
 ${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
 
 <div class="card"><div class="k">Only trade markets that close</div>${horizonPicker}</div>
+
+${modelCard}
 
 ${s.limits.length ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
 

@@ -212,6 +212,16 @@ test("model is blended halfway toward the market price", () => {
   assert.equal(blendWithMarket(0.3, null, 0.14, 0.5), 0.3);
 });
 
+test("model trust set on the dashboard overrides the default", async () => {
+  const { engine, store } = setup();
+  store.set("model_weight", "0.75");
+  await engine.tick();
+  assert.equal(engine.s.modelWeight, 0.75);
+  store.set("model_weight", "7");
+  await engine.tick();
+  assert.equal(engine.s.modelWeight, 0.5); // invalid -> default
+});
+
 test("15-minute limit skips markets closing later", async () => {
   const { engine, store } = setup();
   store.set("horizon", "15m");
@@ -258,7 +268,8 @@ test("dashboard renders and escapes Kalshi text", async () => {
     {
       mode: "paper", problem: null, status: engine.status, lastError: null, alive: true, killSwitch: false,
       horizon: "day", horizons: [{ key: "day", label: "Within a day", short: "1 day" }],
-      limits: [{ key: "maxCostPerOrder", label: "Max per trade", help: "h", value: 5, dflt: 5 }], summary: store.summary(), today: 0,
+      limits: [{ key: "maxCostPerOrder", label: "Max per trade", help: "h", value: 5, dflt: 5 }],
+      modelWeight: { value: 0.5, dflt: 0.5, options: [0.25, 0.5, 0.75, 1] }, summary: store.summary(), today: 0,
       byStrategy: store.byStrategy(), trades: store.recentTrades(), decisions: store.recentDecisions(), timezone: "America/New_York", diag: {},
     },
     { authed: true, passwordSet: true },
@@ -266,5 +277,6 @@ test("dashboard renders and escapes Kalshi text", async () => {
   assert.ok(html.includes("KXFEDDEC-26"));
   assert.ok(!html.includes("<script>x"));
   assert.ok(html.includes('action="/logout"'));
+  assert.ok(html.includes('action="/model"') && html.includes(">50%<"));
   assert.match(html, /closes (today|tomorrow|[A-Z][a-z]{2} \d+) \d{1,2}:\d{2}/);
 });

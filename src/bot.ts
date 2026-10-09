@@ -19,6 +19,7 @@ export interface Snapshot {
   horizon: string;
   horizons: { key: string; label: string; short: string }[];
   limits: { key: string; label: string; help: string; value: number; dflt: number }[];
+  modelWeight?: { value: number; dflt: number; options: number[] };
   summary: ReturnType<Store["summary"]>;
   today: number;
   byStrategy: { strategy: string; trades: number; pnl: number }[];
@@ -28,7 +29,9 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.4.0";
+export const VERSION = "0.4.1";
+
+export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
 export class Bot extends DurableObject<Env> {
   store: Store;
@@ -102,6 +105,7 @@ export class Bot extends DurableObject<Env> {
       horizon,
       horizons: Object.entries(HORIZONS).map(([key, h]) => ({ key, label: h.label, short: h.short })),
       limits: this.limitRows(),
+      modelWeight: { value: this.modelWeight(), dflt: this.settings.modelWeight, options: MODEL_WEIGHT_OPTIONS },
       summary: this.store.summary(),
       today: this.store.pnlForDay(tradingDay(now, tz)),
       byStrategy: this.store.byStrategy(),
@@ -152,6 +156,17 @@ export class Bot extends DurableObject<Env> {
 
   async resetLimits(): Promise<void> {
     this.store.set("limits", "{}");
+    this.engine?.applyOverrides();
+  }
+
+  private modelWeight(): number {
+    const w = Number(this.store.get("model_weight"));
+    return w > 0 && w <= 1 ? w : this.settings.modelWeight;
+  }
+
+  async setModelWeight(w: number): Promise<void> {
+    if (!(w > 0 && w <= 1)) return;
+    this.store.set("model_weight", String(w));
     this.engine?.applyOverrides();
   }
 
