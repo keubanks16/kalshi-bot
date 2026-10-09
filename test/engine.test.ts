@@ -763,3 +763,21 @@ test("a timeout with a read-only message is reported, not turned into a crash ab
   };
   await assert.rejects(engine.tick(), (e: Error) => /while scanning markets: The operation was aborted due to timeout/.test(e.message) && !/read only/.test(e.message));
 });
+
+test("a skipped bet says exactly why: which limit, or what Kalshi said", async () => {
+  // limit: live max-per-trade below the price of one contract
+  const a = liveMaker();
+  a.store.set("limits_live", JSON.stringify({ maxCostPerOrder: 0.3 }));
+  await a.again();
+  const why = a.store.recentDecisions(5).map((d: any) => d.reason).join(" | ");
+  assert.match(why, /not posted: blocked by max per trade \(\$0\.30 left, 1 contract costs \$0\.54\)/);
+
+  // Kalshi rejects the order
+  const b = liveMaker();
+  (b.client as any).createMakerOrder = async () => {
+    throw new KalshiError(400, '{"error":{"code":"post_only_cross"}}');
+  };
+  await b.again();
+  const why2 = b.store.recentDecisions(5).map((d: any) => d.reason).join(" | ");
+  assert.match(why2, /not posted: Order on .* rejected: .*post_only_cross/);
+});

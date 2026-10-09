@@ -695,18 +695,31 @@ export class Engine {
 
   /** Dollars the risk limits still allow on this event (and market, if given), counted within one mode. */
   room(eventTicker: string, ticker: string | null, mode: Mode = this.s.mode): number {
+    return this.roomWhy(eventTicker, ticker, mode).room;
+  }
+
+  /** Dollars the limits allow, and which limit is the tightest (for explaining skipped bets). */
+  roomWhy(eventTicker: string, ticker: string | null, mode: Mode = this.s.mode): { room: number; limit: string } {
     const s = { ...this.s, ...this.limitsFor(mode) };
-    let room = Math.min(
-      s.maxCostPerEvent - this.store.eventExposure(eventTicker, mode),
-      s.maxOpenRisk - this.store.openRisk(mode),
-      s.maxDailyLoss - this.store.dayLoss(tradingDay(this.clock(), s.timezone), mode),
-    );
+    const caps: [number, string][] = [
+      [s.maxCostPerEvent - this.store.eventExposure(eventTicker, mode), "max per event"],
+      [s.maxOpenRisk - this.store.openRisk(mode), "max open at once"],
+      [s.maxDailyLoss - this.store.dayLoss(tradingDay(this.clock(), s.timezone), mode), "daily loss limit"],
+    ];
     if (ticker) {
       const ex = this.store.marketExposure(ticker, mode);
-      if (ex.orders >= s.maxOrdersPerMarket) return 0;
-      room = Math.min(room, s.maxCostPerMarket - ex.cost, s.maxCostPerOrder);
+      if (ex.orders >= s.maxOrdersPerMarket) return { room: 0, limit: `already bet this market (${s.maxOrdersPerMarket} per market)` };
+      caps.push([s.maxCostPerMarket - ex.cost, "max per market"], [s.maxCostPerOrder, "max per trade"]);
     }
-    return Math.max(0, room);
+    const [room, limit] = caps.reduce((a, b) => (b[0] < a[0] ? b : a));
+    return { room: Math.max(0, room), limit };
+  }
+
+  /** Why the last buy()/placeMaker() call placed nothing, in plain words for the log. */
+  private skipWhy = "";
+  private blockedBy(eventTicker: string, ticker: string, mode: Mode, price: number): string {
+    const r = this.roomWhy(eventTicker, ticker, mode);
+    return r.room <= 0 && /already bet/.test(r.limit) ? r.limit : `blocked by ${r.limit} ($${r.room.toFixed(2)} left, 1 contract costs $${price.toFixed(2)})`;
   }
 
   // ------------------------------------------------------------ maker orders
@@ -725,10 +738,10 @@ export class Engine {
     const sideUp = o.side.toUpperCase();
     if (!this.usesMaker(o.strategy)) {
       const filled = await this.buy(o);
-      return filled ? { ok: true, message: `bought ${filled} ${sideUp} @ $${o.price.toFixed(2)}` } : { ok: false, message: "not filled or blocked by limits" };
+      return filled ? { ok: true, message: `bought ${filled} ${sideUp} @ $${o.price.toFixed(2)}` } : { ok: false, message: `not bought: ${this.skipWhy || "not filled"}` };
     }
     const r = await this.placeMaker(o);
-    if (!r.filled && !r.resting) return { ok: false, message: "not posted or blocked by limits" };
+    if (!r.filled && !r.resting) return { ok: false, message: `not posted: ${this.skipWhy || "blocked by limits"}` };
     const parts = [r.filled ? `bought ${r.filled}` : "", r.resting ? `posted ${r.resting}` : ""].filter(Boolean).join(", ");
     return { ok: true, message: `${parts} ${sideUp} @ $${o.price.toFixed(2)} (maker${r.resting ? ", resting" : ""})` };
   }
@@ -738,31 +751,34 @@ export class Engine {
     const m = o.market;
     const mode = this.modeFor(o.strategy);
     const none = { filled: 0, resting: 0 };
-    if (this.store.openSides(m.ticker, mode).some((side) => side !== o.side)) return none;
+    this.skipWhy = "";
+    if (this.store.openSides(m.ticker, mode).some((side) => side !== o.side)) return (this.skipWhy = "already holding the other side"), none;
     const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.makerFeeRate);
-    if (contracts < 1) return none;
+    if (contracts < 1) return (this.skipWhy = this.blockedBy(m.event_ticker, m.ticker, mode, o.price)), none;
 
     const now = this.clock();
     const close = ts(m.close_time);
     const ttl = o.strategy === "crypto" ? this.s.makerTtlSeconds : this.s.makerSlowTtlSeconds;
     const expiresAt = Math.floor(Math.min(now + ttl, close - this.s.minSecondsLeft, o.expiresAt ?? Infinity));
-    if (expiresAt - now < 10) return none;
+    if (expiresAt - now < 10) return (this.skipWhy = "too close to the market's close"), none;
 
     let orderId: string;
     let placed: Order = {};
     if (mode !== "paper") {
       try {
         const sent = await this.sendOrReconcile(m.ticker, (id) => this.client.createMakerOrder(m.ticker, o.side, contracts, o.price, expiresAt, id));
-        if (!sent) return none;
+        if (!sent) return (this.skipWhy = this.lastError ?? "Kalshi didn't accept the order"), none;
         placed = sent;
       } catch (e) {
         if (e instanceof KalshiError && e.status === 429) throw e;
         // Post-only orders are rejected if the price would cross; just skip this round.
         this.lastError = `Maker order on ${m.ticker} failed: ${(e as Error).message}`;
+        this.skipWhy = this.lastError;
         return none;
       }
       if (!placed.order_id) {
         this.lastError = `Maker order on ${m.ticker}: Kalshi returned no order id.`;
+        this.skipWhy = this.lastError;
         return none;
       }
       orderId = placed.order_id;
@@ -978,10 +994,11 @@ export class Engine {
   async buy(o: BuyOrder): Promise<number> {
     const m = o.market;
     const mode = this.modeFor(o.strategy);
+    this.skipWhy = "";
     // Never bet against our own open position on the same market.
-    if (this.store.openSides(m.ticker, mode).some((side) => side !== o.side)) return 0;
+    if (this.store.openSides(m.ticker, mode).some((side) => side !== o.side)) return (this.skipWhy = "already holding the other side"), 0;
     const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.takerFeeRate);
-    if (contracts < 1) return 0;
+    if (contracts < 1) return (this.skipWhy = this.blockedBy(m.event_ticker, m.ticker, mode, o.price)), 0;
 
     let filled: number;
     let fee: number;
@@ -989,7 +1006,7 @@ export class Engine {
     if (mode !== "paper") {
       try {
         const order = await this.sendOrReconcile(m.ticker, (id) => this.client.createOrder(m.ticker, o.side, contracts, o.price, id));
-        if (!order) return 0;
+        if (!order) return (this.skipWhy = this.lastError ?? "Kalshi didn't accept the order"), 0;
         orderId = order.order_id ?? null;
         filled = Math.floor(Number(order.fill_count_fp ?? order.fill_count ?? 0));
         fee = Number(order.taker_fees_dollars ?? 0) || takerFee(filled, o.price, this.s.takerFeeRate);
