@@ -753,9 +753,63 @@ export class Engine {
     const cash = await this.availableCash(m);
     if (cash === null) return contracts; // can't tell; let Kalshi decide
     const fit = fitToRoom(contracts, price, cash, feeRate);
-    const shard = m && this.kalshiCash?.byIndex && m.exchange_index !== undefined && m.exchange_index !== null ? ` on this market's exchange shard #${Number(m.exchange_index)}` : "";
-    if (fit < 1) this.skipWhy = `not enough cash in Kalshi${shard} ($${cash.toFixed(2)} available, 1 contract costs about $${(price + takerFee(1, price, feeRate)).toFixed(2)})`;
+    const hasShard = !!(m && this.kalshiCash?.byIndex && m.exchange_index !== undefined && m.exchange_index !== null && (m.exchange_index as unknown) !== "");
+    const shard = hasShard ? ` on this market's exchange shard #${Number(m!.exchange_index)}` : "";
+    if (fit < 1) {
+      this.skipWhy = `not enough cash in Kalshi${shard} ($${cash.toFixed(2)} available, 1 contract costs about $${(price + takerFee(1, price, feeRate)).toFixed(2)})`;
+      if (hasShard && this.s.autoFundShards) {
+        const moved = await this.fundShard(Number(m!.exchange_index), price + takerFee(1, price, feeRate) - cash);
+        if (moved) this.skipWhy = `${moved}; will bet once it lands`;
+      }
+    }
     return fit;
+  }
+
+  /** The last cash move between shards, for the dashboard. */
+  lastShardMove: { text: string; at: number; ok: boolean } | null = null;
+  private shardMoveAt = new Map<number, number>();
+
+  /**
+   * Top a shard up to the live bankroll from whichever other shard holds the
+   * most cash, at most once a minute per shard. Returns what it did, or null.
+   * Only ever moves money between shards of this same Kalshi account.
+   */
+  private async fundShard(toShard: number, atLeast: number): Promise<string | null> {
+    const now = this.clock();
+    const by = this.kalshiCash?.byIndex;
+    if (!by) return null;
+    if (now - (this.shardMoveAt.get(toShard) ?? 0) < 60) {
+      this.cashStale = true; // re-read next round so the bet goes through as soon as the money lands
+      return `cash move to shard #${toShard} already under way`;
+    }
+    const have = by[toShard] ?? 0;
+    const target = Math.max(this.limitsFor("live").bankroll, have + atLeast);
+    const sources = Object.entries(by)
+      .map(([i, v]) => [Number(i), Number(v)] as const)
+      .filter(([i]) => i !== toShard)
+      .sort((a, b) => b[1] - a[1]);
+    if (!sources.length) return null;
+    const [from, available] = sources[0];
+    const amount = Math.floor(Math.min(target - have, available) * 100) / 100;
+    if (amount < atLeast || amount <= 0) {
+      this.lastShardMove = { text: `Couldn't fund shard #${toShard}: only $${available.toFixed(2)} on shard #${from}.`, at: now, ok: false };
+      return null;
+    }
+    this.shardMoveAt.set(toShard, now);
+    try {
+      await this.client.transferBetweenShards(from, toShard, amount);
+    } catch (e) {
+      if (e instanceof KalshiError && e.status === 429) throw e;
+      const why = (e as Error)?.message ?? String(e);
+      this.lastShardMove = { text: `Moving $${amount.toFixed(2)} from shard #${from} to #${toShard} failed: ${why}`, at: now, ok: false };
+      this.lastError = this.lastShardMove.text;
+      return null;
+    }
+    this.cashStale = true;
+    const text = `moved $${amount.toFixed(2)} from Kalshi shard #${from} to #${toShard}`;
+    this.lastShardMove = { text: text[0].toUpperCase() + text.slice(1) + ".", at: now, ok: true };
+    this.store.addDecision({ ts: now, strategy: "cash", ticker: `shard #${toShard}`, action: "transfer", reason: text });
+    return text;
   }
 
   /** Why the last buy()/placeMaker() call placed nothing, in plain words for the log. */

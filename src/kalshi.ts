@@ -281,6 +281,24 @@ export class KalshiClient {
     return { total, byIndex };
   }
 
+  /**
+   * Move cash between exchange shards of this account. Kalshi processes it in
+   * the background. API orders can only spend cash already on their market's
+   * shard (crypto is shard 2), unlike app orders, which Kalshi funds automatically.
+   */
+  async transferBetweenShards(fromShard: number, toShard: number, dollars: number, clientTransferId: string = crypto.randomUUID()): Promise<string> {
+    const body = {
+      source: "event_contract",
+      destination: "event_contract",
+      amount: Math.round(dollars * 10000), // centicents
+      client_transfer_id: clientTransferId,
+      source_exchange_shard: fromShard,
+      destination_exchange_shard: toShard,
+    };
+    const r = await this.request<{ transfer_id?: string }>("POST", "/portfolio/intra_exchange_instance_transfer", undefined, body);
+    return String(r.transfer_id ?? "");
+  }
+
   async getBalance(): Promise<number> {
     const d = await this.request<{ balance?: number; balance_dollars?: string }>("GET", "/portfolio/balance");
     if (d.balance_dollars !== undefined) return Number(d.balance_dollars);

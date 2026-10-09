@@ -152,6 +152,7 @@ All are in `wrangler.jsonc` → `vars`.
 - `CRYPTO_ENABLED` / `ARB_ENABLED` — turn either strategy off.
 - `CRYPTO_ASSETS` — which coins to trade.
 - `KELLY_FRACTION` — 0.25 is conservative; don't go above 0.5.
+- `AUTO_FUND_SHARDS` — on by default. Kalshi keeps cash separately per exchange shard (crypto is shard 2, sports such as baseball, basketball and tennis shard 3), and API orders, unlike app orders, can only spend cash already on their market's shard. When a live bet's shard is short, the bot moves cash there from your fullest other shard, topping it up to your live bankroll. It only moves money between shards of your own account, at most once a minute per shard, and logs every move. The bet goes through on the next round, once Kalshi has processed the transfer. Set `false` to manage shards yourself on Kalshi's Exchange Indexes page.
 - `MIN_ONE_CONTRACT` — on by default. When a bet clears the edge bar but sizes to under one contract (common with a small bankroll), it buys one contract anyway, still within every limit. Set `false` to skip those bets instead.
 - Live bets are checked against the cash available in your Kalshi account. An order is shrunk to fit, or skipped with "not enough cash in Kalshi" in the log. While anything trades live, the dashboard's **Now** card shows the available cash as the bot sees it.
 - `TRADE_HORIZON` — the starting time limit. The dashboard buttons override it.

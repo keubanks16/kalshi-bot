@@ -93,7 +93,8 @@ export interface Settings {
   // risk limits
   bankroll: number;
   maxContractsPerOrder: number;
-  minOneContract: boolean; // buy 1 contract when an edge clears the bar but sizes under 1 (small bankrolls)
+  minOneContract: boolean;
+  autoFundShards: boolean; // live: move cash onto a market's exchange shard when a bet there needs it // buy 1 contract when an edge clears the bar but sizes under 1 (small bankrolls)
   maxCostPerOrder: number;
   maxCostPerMarket: number;
   maxCostPerEvent: number;
@@ -180,6 +181,7 @@ export function loadSettings(env: Env): Settings {
     bankroll: num(env, "BANKROLL", 100),
     maxContractsPerOrder: num(env, "MAX_CONTRACTS_PER_ORDER", 10),
     minOneContract: bool(env, "MIN_ONE_CONTRACT", true),
+    autoFundShards: bool(env, "AUTO_FUND_SHARDS", true),
     maxCostPerOrder: num(env, "MAX_COST_PER_ORDER", 5),
     maxCostPerMarket: num(env, "MAX_COST_PER_MARKET", 10),
     maxCostPerEvent: num(env, "MAX_COST_PER_EVENT", 20),

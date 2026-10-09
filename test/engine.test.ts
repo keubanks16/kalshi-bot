@@ -845,3 +845,65 @@ test("live bets only count the cash on their market's exchange shard", async () 
   await b.again();
   assert.equal(b.calls.filter((c) => c.startsWith("post")).length, 1);
 });
+
+test("live: an empty market shard is topped up to the live bankroll, once, then the bet goes through", async () => {
+  const a = liveMaker();
+  a.store.set("limits_live", JSON.stringify({ bankroll: 50 }));
+  let bal = { total: 59.1, byIndex: { 0: 59.1, 2: 0 } as Record<number, number> };
+  const moves: string[] = [];
+  (a.client as any).getBalanceDetail = async () => bal;
+  (a.client as any).transferBetweenShards = async (from: number, to: number, dollars: number) => {
+    moves.push(`${from}->${to} $${dollars.toFixed(2)}`);
+    return "t1";
+  };
+  a.client.all[0].exchange_index = 2;
+  await a.again();
+  assert.deepEqual(moves, ["0->2 $50.00"], "moved exactly up to the live bankroll");
+  assert.equal(a.calls.filter((c) => c.startsWith("post")).length, 0, "no bet until the money lands");
+  assert.match(a.store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /moved \$50\.00 from Kalshi shard #0 to #2/);
+  assert.ok(a.engine.lastShardMove?.ok);
+
+  await a.again(5); // still not landed: no second transfer within a minute
+  assert.equal(moves.length, 1);
+
+  bal = { total: 59.1, byIndex: { 0: 9.1, 2: 50 } }; // transfer landed
+  await a.again(5);
+  assert.equal(a.calls.filter((c) => c.startsWith("post")).length, 1, "bet placed once the shard has cash");
+  assert.equal(moves.length, 1);
+});
+
+test("live: no transfer when the other shards can't cover even one contract", async () => {
+  const a = liveMaker();
+  (a.client as any).getBalanceDetail = async () => ({ total: 0.1, byIndex: { 0: 0.1, 2: 0 } });
+  let moved = false;
+  (a.client as any).transferBetweenShards = async () => ((moved = true), "t");
+  a.client.all[0].exchange_index = 2;
+  await a.again();
+  assert.equal(moved, false);
+  assert.match(a.engine.lastShardMove?.text ?? "", /Couldn't fund shard #2/);
+});
+
+test("live: auto-funding can be switched off", async () => {
+  const a = liveMaker({ AUTO_FUND_SHARDS: "false" });
+  (a.client as any).getBalanceDetail = async () => ({ total: 59.1, byIndex: { 0: 59.1, 2: 0 } });
+  let moved = false;
+  (a.client as any).transferBetweenShards = async () => ((moved = true), "t");
+  a.client.all[0].exchange_index = 2;
+  await a.again();
+  assert.equal(moved, false);
+});
+
+test("transfer request uses centicents and the right shards", async () => {
+  const { KalshiClient } = await import("../src/kalshi.ts");
+  let sent: any = null;
+  const c = new KalshiClient("https://x.test/trade-api/v2", "", null, (async (_u: string, init: any) => {
+    sent = JSON.parse(init.body);
+    return new Response(JSON.stringify({ transfer_id: "abc" }), { status: 200 });
+  }) as any);
+  assert.equal(await c.transferBetweenShards(0, 2, 50), "abc");
+  assert.equal(sent.amount, 500000);
+  assert.equal(sent.source_exchange_shard, 0);
+  assert.equal(sent.destination_exchange_shard, 2);
+  assert.equal(sent.source, "event_contract");
+  assert.equal(sent.destination, "event_contract");
+});

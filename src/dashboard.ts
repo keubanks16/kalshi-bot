@@ -250,7 +250,7 @@ ${
               .map(([i, v]) => `#${esc(i)} $${Number(v).toFixed(2)}`)
               .join(" · ")}. A bet can only use the cash on its own market's shard.`
           : ""
-      }${s.kalshiCash.error ? ` · couldn't read it: ${esc(s.kalshiCash.error)}` : ""}</div>`
+      }${s.kalshiCash.lastMove ? `<br><span class="${s.kalshiCash.lastMove.ok ? "" : "err"}">${esc(s.kalshiCash.lastMove.text)} (${esc(time(s.kalshiCash.lastMove.at))})</span>` : ""}${s.kalshiCash.error ? ` · couldn't read it: ${esc(s.kalshiCash.error)}` : ""}</div>`
     : ""
 }
 ${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
