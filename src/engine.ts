@@ -99,7 +99,12 @@ export class Engine {
       saved = JSON.parse(this.store.get("limits") ?? "{}");
     } catch {}
     const w = Number(this.store.get("model_weight"));
-    this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}) };
+    // Mode chosen on the dashboard (paper <-> live) overrides the deployed one.
+    const mode = this.store.get("mode_override");
+    const modeOverride = mode === "paper" || (mode === "live" && this.base.mode !== "demo") ? { mode: mode as Settings["mode"] } : {};
+    const prevMode = this.s?.mode;
+    this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride };
+    if (prevMode && prevMode !== this.s.mode) this.bankrollCache = null;
   }
 
   async tick(): Promise<void> {
@@ -353,7 +358,7 @@ export class Engine {
       // Never size off more than the configured bankroll, even if the account holds more.
       value = Math.min(await this.client.getBalance(), this.s.bankroll);
     } else {
-      const sum = this.store.summary();
+      const sum = this.store.summary(this.s.mode);
       value = this.s.bankroll + sum.pnl - sum.openCost;
     }
     this.bankrollCache = { value, at: this.clock() };
@@ -364,12 +369,12 @@ export class Engine {
   room(eventTicker: string, ticker: string | null): number {
     const s = this.s;
     let room = Math.min(
-      s.maxCostPerEvent - this.store.eventExposure(eventTicker),
-      s.maxOpenRisk - this.store.openRisk(),
-      s.maxDailyLoss - this.store.dayLoss(tradingDay(this.clock(), s.timezone)),
+      s.maxCostPerEvent - this.store.eventExposure(eventTicker, s.mode),
+      s.maxOpenRisk - this.store.openRisk(s.mode),
+      s.maxDailyLoss - this.store.dayLoss(tradingDay(this.clock(), s.timezone), s.mode),
     );
     if (ticker) {
-      const ex = this.store.marketExposure(ticker);
+      const ex = this.store.marketExposure(ticker, s.mode);
       if (ex.orders >= s.maxOrdersPerMarket) return 0;
       room = Math.min(room, s.maxCostPerMarket - ex.cost, s.maxCostPerOrder);
     }
@@ -380,7 +385,7 @@ export class Engine {
   async buy(o: BuyOrder): Promise<number> {
     const m = o.market;
     // Never bet against our own open position on the same market.
-    if (this.store.openSides(m.ticker).some((side) => side !== o.side)) return 0;
+    if (this.store.openSides(m.ticker, this.s.mode).some((side) => side !== o.side)) return 0;
     const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker), this.s.takerFeeRate);
     if (contracts < 1) return 0;
 

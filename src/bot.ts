@@ -11,6 +11,11 @@ import { Store, type Sql } from "./store.ts";
 
 export interface Snapshot {
   mode: string;
+  view?: string; // which mode's trades and P&L are shown
+  views?: string[];
+  canGoLive?: boolean;
+  keysSet?: boolean;
+  message?: string | null;
   problem: string | null;
   status: string;
   lastError: string | null;
@@ -29,7 +34,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.4.1";
+export const VERSION = "0.5.0";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
@@ -89,14 +94,32 @@ export class Bot extends DurableObject<Env> {
     }
   }
 
-  async snapshot(): Promise<Snapshot> {
+  /** The mode trading right now: dashboard choice if any, else the deployed setting. */
+  currentMode(): string {
+    if (this.engine) return this.engine.s.mode;
+    const o = this.store.get("mode_override");
+    return o === "paper" || (o === "live" && this.settings.mode !== "demo") ? o : this.settings.mode;
+  }
+
+  private keysSet(): boolean {
+    return !!(this.env.KALSHI_API_KEY_ID && this.env.KALSHI_PRIVATE_KEY);
+  }
+
+  async snapshot(viewArg?: string): Promise<Snapshot> {
     await this.start();
     const e = this.engine;
     const now = Date.now() / 1000;
     const tz = this.settings.timezone;
     const horizon = e?.horizon() ?? this.store.get("horizon") ?? this.settings.defaultHorizon;
+    const mode = this.currentMode();
+    const views = [...new Set([mode, ...this.store.modesWithTrades()])];
+    const view = viewArg && views.includes(viewArg) ? viewArg : mode;
     return {
-      mode: this.settings.mode,
+      mode,
+      view,
+      views,
+      canGoLive: this.settings.mode !== "demo",
+      keysSet: this.keysSet(),
       problem: this.problem,
       status: this.problem ? "Not running — fix the setting below" : e?.status ?? "Starting up…",
       lastError: e?.lastError ?? null,
@@ -106,10 +129,10 @@ export class Bot extends DurableObject<Env> {
       horizons: Object.entries(HORIZONS).map(([key, h]) => ({ key, label: h.label, short: h.short })),
       limits: this.limitRows(),
       modelWeight: { value: this.modelWeight(), dflt: this.settings.modelWeight, options: MODEL_WEIGHT_OPTIONS },
-      summary: this.store.summary(),
-      today: this.store.pnlForDay(tradingDay(now, tz)),
-      byStrategy: this.store.byStrategy(),
-      trades: this.store.recentTrades(30),
+      summary: this.store.summary(view),
+      today: this.store.pnlForDay(tradingDay(now, tz), view),
+      byStrategy: this.store.byStrategy(view),
+      trades: this.store.recentTrades(view, 30),
       decisions: this.store.recentDecisions(25),
       timezone: tz,
       diag: {
@@ -168,6 +191,19 @@ export class Bot extends DurableObject<Env> {
     if (!(w > 0 && w <= 1)) return;
     this.store.set("model_weight", String(w));
     this.engine?.applyOverrides();
+  }
+
+  /** Switch between paper and live from the dashboard. Returns a problem, or null. */
+  async setMode(mode: string): Promise<string | null> {
+    if (mode !== "paper" && mode !== "live") return "Unknown mode.";
+    if (mode === "live") {
+      if (this.settings.mode === "demo") return "This bot is deployed in demo mode; change BOT_MODE in wrangler.jsonc instead.";
+      if (!this.keysSet()) return "Add your Kalshi API key secrets before going live.";
+    }
+    this.store.set("mode_override", mode);
+    this.store.set("mode", mode);
+    this.engine?.applyOverrides();
+    return null;
   }
 
   async setHorizon(h: string): Promise<void> {

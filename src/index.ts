@@ -34,6 +34,8 @@ async function isAuthed(req: Request, env: Env): Promise<boolean> {
   return !!m && timingSafeEqual(m[1], await sessionToken(pw));
 }
 
+const homeMsg = (msg: string) => new Response(null, { status: 303, headers: { Location: `/?msg=${encodeURIComponent(msg)}` } });
+
 const home = (extraHeaders: Record<string, string> = {}) => new Response(null, { status: 303, headers: { Location: "/", ...extraHeaders } });
 
 export default {
@@ -43,7 +45,8 @@ export default {
     ctx.waitUntil(stub.start());
 
     if (req.method === "GET" && url.pathname === "/") {
-      const snap = await stub.snapshot();
+      const snap = await stub.snapshot(url.searchParams.get("view") ?? undefined);
+      snap.message = url.searchParams.get("msg");
       const html = renderDashboard(snap, { authed: await isAuthed(req, env), passwordSet: !!env.DASHBOARD_PASSWORD });
       return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     }
@@ -65,6 +68,20 @@ export default {
 
     if (req.method === "POST" && url.pathname === "/logout") {
       return home({ "Set-Cookie": `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
+    }
+
+    if (req.method === "POST" && url.pathname === "/mode") {
+      if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+      const form = await req.formData();
+      const mode = String(form.get("mode") ?? "");
+      if (mode === "live") {
+        // Real money: ask for the password again and an explicit confirmation.
+        const pw = env.DASHBOARD_PASSWORD ?? "";
+        if (!pw || !timingSafeEqual(String(form.get("password") ?? ""), pw)) return homeMsg("Wrong password — still in paper mode.");
+        if (form.get("confirm") !== "yes") return homeMsg("Tick the box to confirm real money — still in paper mode.");
+      }
+      const problem = await stub.setMode(mode);
+      return homeMsg(problem ?? (mode === "live" ? "LIVE: the bot now trades real money." : "Back to paper trading."));
     }
 
     if (req.method === "POST" && ["/kill", "/horizon", "/limits", "/model"].includes(url.pathname)) {

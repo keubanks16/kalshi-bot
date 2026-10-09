@@ -83,15 +83,17 @@ Why add a key in paper mode: without one, Kalshi limits requests by IP address, 
 
 The plain settings (mode, limits, strategy knobs) live in `wrangler.jsonc` under `vars`. Edit that file on GitHub and Cloudflare redeploys with the new values.
 
-## Going from paper → demo → live
+## Going live
 
-1. **Paper** for a few weeks. Watch the win rate against the prices paid in each strategy. A crypto model that wins 60% while paying 62¢ is losing money.
-2. **Demo:** make an account and API key at [demo.kalshi.co](https://demo.kalshi.co). Add the key secrets, then set `"BOT_MODE": "demo"` in `wrangler.jsonc`. This proves real orders, fills and signing all work, with fake money.
-3. **Live:** create a key on kalshi.com (different from the demo key) and replace the secrets. Keep the limits small and set:
-   ```jsonc
-   "BOT_MODE": "live",
-   "LIVE_TRADING_CONFIRM": "yes",
-   ```
+**From the dashboard (easiest):** sign in, open **Trading mode → Go live with real money**, re-enter your password, tick the confirmation box and tap **Go live**. It needs your Kalshi API key secrets in place. **Switch back to paper** (or the kill switch) stops real trading instantly.
+
+Before you do, run paper for at least a few days. Check that its win rate beats the prices it paid, and set small spending limits.
+
+Paper and live results are kept separate. The dashboard shows the current mode's P&L, win rate and trades, with tabs to look back at the other mode's history. Paper positions never count against live risk limits.
+
+**Optional demo step:** Kalshi's [demo exchange](https://demo.kalshi.co) uses fake money with real order handling. Set `"BOT_MODE": "demo"` in `wrangler.jsonc` and use demo API keys, which are separate from your real ones.
+
+**From config instead:** `"BOT_MODE": "live"` plus `"LIVE_TRADING_CONFIRM": "yes"` in `wrangler.jsonc` makes live the deployed default.
 
 ## Settings worth knowing
 

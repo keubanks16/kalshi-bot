@@ -154,7 +154,7 @@ test("arbitrage pays its locked-in profit whichever outcome wins", async () => {
     const cost = store.openTrades().reduce((s, t) => s + t.cost, 0);
     for (const m of client.all) if (m.event_ticker === "KXFEDDEC-26") m.result = m.ticker.endsWith(`-${winner}`) ? "yes" : "no";
     await engine.settle();
-    const pnl = store.summary().pnl;
+    const pnl = store.summary("paper").pnl;
     assert.ok(pnl > 0, `winner ${winner}: pnl ${pnl} on cost ${cost}`);
   }
 });
@@ -165,7 +165,7 @@ test("crypto win and loss settle correctly", async () => {
   const t = store.openTrades()[0];
   client.all[0].result = "no";
   await engine.settle();
-  assert.equal(store.recentTrades()[0].pnl, -t.cost);
+  assert.equal(store.recentTrades("paper")[0].pnl, -t.cost);
 });
 
 test("backs off when Kalshi says too many requests", async () => {
@@ -204,7 +204,7 @@ test("never buys the opposite side of an open position", async () => {
   client.all[0].no_ask_dollars = "0.40";
   engine.series.forEach((st) => (st.nextCheck = 0));
   await engine.tick();
-  assert.deepEqual(store.openSides("KXBTCD-26OCT0911-T80000"), ["yes"]);
+  assert.deepEqual(store.openSides("KXBTCD-26OCT0911-T80000", "paper"), ["yes"]);
 });
 
 test("model is blended halfway toward the market price", () => {
@@ -220,6 +220,36 @@ test("model trust set on the dashboard overrides the default", async () => {
   store.set("model_weight", "7");
   await engine.tick();
   assert.equal(engine.s.modelWeight, 0.5); // invalid -> default
+});
+
+test("switching to live keeps paper results and risk separate", async () => {
+  const { engine, store } = setup({ ARB_ENABLED: "false" });
+  await engine.tick(); // paper trade
+  assert.equal(store.summary("paper").trades, 1);
+  store.set("mode_override", "live");
+  engine.applyOverrides();
+  assert.equal(engine.s.mode, "live");
+  assert.equal(store.summary("live").trades, 0);
+  assert.equal(store.openRisk("live"), 0); // paper positions don't use up live limits
+  store.set("mode_override", "paper");
+  engine.applyOverrides();
+  assert.equal(engine.s.mode, "paper");
+});
+
+test("dashboard: go-live form for paper, switch-back for live, results tabs", () => {
+  const base = {
+    problem: null, status: "ok", lastError: null, alive: true, killSwitch: false, horizon: "day",
+    horizons: [], limits: [], summary: { trades: 0, settled: 0, wins: 0, pnl: 0, fees: 0, openCost: 0 }, today: 0,
+    byStrategy: [], trades: [], decisions: [], timezone: "America/New_York", diag: {}, canGoLive: true, keysSet: true,
+  } as any;
+  const paper = renderDashboard({ ...base, mode: "paper", views: ["paper"] }, { authed: true, passwordSet: true });
+  assert.ok(paper.includes("Go live with real money") && paper.includes('name="confirm"'));
+  const live = renderDashboard({ ...base, mode: "live", views: ["live", "paper"], view: "live" }, { authed: true, passwordSet: true });
+  assert.ok(live.includes("Switch back to paper") && live.includes("?view=paper"));
+  const noKeys = renderDashboard({ ...base, mode: "paper", keysSet: false }, { authed: true, passwordSet: true });
+  assert.ok(!noKeys.includes('name="confirm"'));
+  const signedOut = renderDashboard({ ...base, mode: "paper" }, { authed: false, passwordSet: true });
+  assert.ok(!signedOut.includes("Go live"));
 });
 
 test("15-minute limit skips markets closing later", async () => {
@@ -252,12 +282,12 @@ test("limits hold over many ticks", async () => {
     engine.series.forEach((st) => (st.nextCheck = 0));
     await engine.tick();
   }
-  assert.ok(store.openRisk() <= 50 + 1e-9);
+  assert.ok(store.openRisk("paper") <= 50 + 1e-9);
   for (const t of new Set(store.openTrades().map((t) => t.ticker))) {
-    const ex = store.marketExposure(t);
+    const ex = store.marketExposure(t, "paper");
     assert.ok(ex.orders <= 3 && ex.cost <= 10 + 1e-9, `${t}: ${JSON.stringify(ex)}`);
   }
-  assert.ok(store.eventExposure("KXFEDDEC-26") <= 20 + 1e-9);
+  assert.ok(store.eventExposure("KXFEDDEC-26", "paper") <= 20 + 1e-9);
 });
 
 test("dashboard renders and escapes Kalshi text", async () => {
@@ -269,8 +299,8 @@ test("dashboard renders and escapes Kalshi text", async () => {
       mode: "paper", problem: null, status: engine.status, lastError: null, alive: true, killSwitch: false,
       horizon: "day", horizons: [{ key: "day", label: "Within a day", short: "1 day" }],
       limits: [{ key: "maxCostPerOrder", label: "Max per trade", help: "h", value: 5, dflt: 5 }],
-      modelWeight: { value: 0.5, dflt: 0.5, options: [0.25, 0.5, 0.75, 1] }, summary: store.summary(), today: 0,
-      byStrategy: store.byStrategy(), trades: store.recentTrades(), decisions: store.recentDecisions(), timezone: "America/New_York", diag: {},
+      modelWeight: { value: 0.5, dflt: 0.5, options: [0.25, 0.5, 0.75, 1] }, summary: store.summary("paper"), today: 0,
+      byStrategy: store.byStrategy("paper"), trades: store.recentTrades("paper"), decisions: store.recentDecisions(), timezone: "America/New_York", diag: {},
     },
     { authed: true, passwordSet: true },
   );

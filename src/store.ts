@@ -105,30 +105,33 @@ export class Store {
   settleTrade(id: number, result: string, pnl: number, now: number): void {
     this.sql.exec("UPDATE trades SET result = ?, pnl = ?, settled_ts = ? WHERE id = ?", result, pnl, now, id);
   }
-  openSides(ticker: string): string[] {
-    return this.rows<{ side: string }>("SELECT DISTINCT side FROM trades WHERE ticker = ? AND result IS NULL", ticker).map((r) => r.side);
+  // Everything below is per trading mode, so paper results never mix with
+  // real ones and paper positions never use up live risk limits.
+  openSides(ticker: string, mode: string): string[] {
+    return this.rows<{ side: string }>("SELECT DISTINCT side FROM trades WHERE ticker = ? AND mode = ? AND result IS NULL", ticker, mode).map((r) => r.side);
   }
-  marketExposure(ticker: string): { cost: number; orders: number } {
-    const r = this.one<{ cost: number; n: number }>("SELECT COALESCE(SUM(cost), 0) AS cost, COUNT(*) AS n FROM trades WHERE ticker = ?", ticker);
+  marketExposure(ticker: string, mode: string): { cost: number; orders: number } {
+    const r = this.one<{ cost: number; n: number }>("SELECT COALESCE(SUM(cost), 0) AS cost, COUNT(*) AS n FROM trades WHERE ticker = ? AND mode = ?", ticker, mode);
     return { cost: Number(r.cost), orders: Number(r.n) };
   }
-  eventExposure(eventTicker: string): number {
-    return Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE event_ticker = ? AND result IS NULL", eventTicker).c);
+  eventExposure(eventTicker: string, mode: string): number {
+    return Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE event_ticker = ? AND mode = ? AND result IS NULL", eventTicker, mode).c);
   }
-  openRisk(): number {
-    return Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE result IS NULL").c);
+  openRisk(mode: string): number {
+    return Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE mode = ? AND result IS NULL", mode).c);
   }
   /** Losses realized today plus everything still at risk from today's trades (worst case). */
-  dayLoss(day: string): number {
+  dayLoss(day: string, mode: string): number {
     const r = this.one<{ realized: number; at_risk: number }>(
       `SELECT COALESCE(SUM(CASE WHEN result IS NOT NULL THEN pnl END), 0) AS realized,
               COALESCE(SUM(CASE WHEN result IS NULL THEN cost END), 0) AS at_risk
-       FROM trades WHERE day = ?`,
+       FROM trades WHERE day = ? AND mode = ?`,
       day,
+      mode,
     );
     return Math.max(0, -Number(r.realized)) + Number(r.at_risk);
   }
-  summary(): { trades: number; settled: number; wins: number; pnl: number; fees: number; openCost: number } {
+  summary(mode: string): { trades: number; settled: number; wins: number; pnl: number; fees: number; openCost: number } {
     const r = this.one(
       `SELECT COUNT(*) AS trades,
               COALESCE(SUM(CASE WHEN result IS NOT NULL THEN 1 ELSE 0 END), 0) AS settled,
@@ -136,7 +139,8 @@ export class Store {
               COALESCE(SUM(pnl), 0) AS pnl,
               COALESCE(SUM(fee), 0) AS fees,
               COALESCE(SUM(CASE WHEN result IS NULL THEN cost ELSE 0 END), 0) AS open_cost
-       FROM trades`,
+       FROM trades WHERE mode = ?`,
+      mode,
     );
     return {
       trades: Number(r.trades),
@@ -147,14 +151,18 @@ export class Store {
       openCost: Number(r.open_cost),
     };
   }
-  pnlForDay(day: string): number {
-    return Number(this.one<{ p: number }>("SELECT COALESCE(SUM(pnl), 0) AS p FROM trades WHERE day = ? AND result IS NOT NULL", day).p);
+  pnlForDay(day: string, mode: string): number {
+    return Number(this.one<{ p: number }>("SELECT COALESCE(SUM(pnl), 0) AS p FROM trades WHERE day = ? AND mode = ? AND result IS NOT NULL", day, mode).p);
   }
-  byStrategy(): { strategy: string; trades: number; pnl: number }[] {
-    return this.rows("SELECT strategy, COUNT(*) AS trades, COALESCE(SUM(pnl), 0) AS pnl FROM trades GROUP BY strategy") as any;
+  byStrategy(mode: string): { strategy: string; trades: number; pnl: number }[] {
+    return this.rows("SELECT strategy, COUNT(*) AS trades, COALESCE(SUM(pnl), 0) AS pnl FROM trades WHERE mode = ? GROUP BY strategy", mode) as any;
   }
-  recentTrades(limit = 25): TradeRow[] {
-    return this.rows<TradeRow>("SELECT * FROM trades ORDER BY ts DESC LIMIT ?", limit);
+  recentTrades(mode: string, limit = 25): TradeRow[] {
+    return this.rows<TradeRow>("SELECT * FROM trades WHERE mode = ? ORDER BY ts DESC LIMIT ?", mode, limit);
+  }
+  /** Modes that have any trades, for the dashboard's view switcher. */
+  modesWithTrades(): string[] {
+    return this.rows<{ mode: string }>("SELECT DISTINCT mode FROM trades").map((r) => r.mode);
   }
 
   // decisions (kept small: Durable Object free plans cap rows written per day)

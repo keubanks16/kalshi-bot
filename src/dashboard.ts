@@ -82,6 +82,35 @@ export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwor
           : `<div class="v small">${pct(mw.value)}</div>`
       }<div class="sub" style="margin-top:8px">Lower blends its estimate more toward the market's price, so it trades less and only on bigger disagreements. 100% trusts the model alone. Default ${pct(mw.dflt)}.</div></div>`;
 
+  const view = s.view ?? s.mode;
+  const views = s.views ?? [s.mode];
+  const MODE: Record<string, string> = { paper: "Paper", demo: "Demo", live: "Live" };
+  const viewSwitch =
+    views.length > 1
+      ? `<div class="seg views">${views
+          .map((v) => `<a href="/?view=${esc(v)}" class="${v === view ? "on" : ""}">${esc(MODE[v] ?? v)} results</a>`)
+          .join("")}</div>`
+      : "";
+
+  let modeCard = "";
+  if (opts.authed && s.mode === "live") {
+    modeCard = `<div class="card live-card"><div class="k">Trading mode</div><div class="v small down">LIVE — real money</div>
+<form method="post" action="/mode" style="margin-top:10px"><input type="hidden" name="mode" value="paper"><button class="go">Switch back to paper</button></form></div>`;
+  } else if (opts.authed && s.mode === "paper") {
+    const body =
+      s.canGoLive === false
+        ? `<div class="sub">This bot is deployed in demo mode. Change BOT_MODE in wrangler.jsonc to switch.</div>`
+        : s.keysSet === false
+          ? `<div class="sub">Add your Kalshi API key secrets in Cloudflare first.</div>`
+          : `<details><summary>Go live with real money</summary>
+<form method="post" action="/mode" class="golive"><input type="hidden" name="mode" value="live">
+<p class="sub">The bot will place real orders on Kalshi using your account balance, within the spending limits below. Check those limits first. The kill switch and "Switch back to paper" stop it instantly.</p>
+<input type="password" name="password" placeholder="Dashboard password" autocomplete="current-password" required>
+<label class="check"><input type="checkbox" name="confirm" value="yes" required> I understand this trades real money and I can lose it</label>
+<button class="stop">Go live</button></form></details>`;
+    modeCard = `<div class="card"><div class="k">Trading mode</div><div class="v small">Paper — simulated trades</div>${body}</div>`;
+  }
+
   const limitsCard = opts.authed
     ? `<form method="post" action="/limits" class="limits">${s.limits
         .map(
@@ -126,6 +155,14 @@ input{font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;
 .limits .dollar{display:flex;align-items:center;gap:4px;font-weight:600}
 .limits input{width:96px;margin:0;text-align:right}
 .limits button.go{margin-top:12px}
+.msg{border-color:var(--accent);font-weight:600}
+.live-card{border-color:var(--down)}
+details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px}
+.golive p{margin:10px 0}
+.check{display:flex;gap:8px;align-items:flex-start;font-size:14px;margin:4px 0 12px}
+.check input{width:auto;margin:3px 0 0}
+.views{margin-top:16px}.views a{flex:1;text-align:center;padding:9px 6px;border:1px solid var(--line);border-radius:10px;color:var(--ink);text-decoration:none;font-size:13px;font-weight:600}
+.views a.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .top form{margin:0}button.link{background:none;color:var(--accent);padding:6px 0;width:auto;font-weight:600;font-size:14px}
 .strat{font-size:13px;color:var(--mute);margin-top:4px}.strat b{font-weight:600}
@@ -135,9 +172,13 @@ input{font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;
 }</div>
 <div class="sub">${s.alive ? `<span class="up">● running</span>` : `<span class="down">● not running</span>`}${s.killSwitch ? ` · <span class="warn">kill switch on</span>` : ""}</div>
 
+${s.message ? `<div class="card msg">${esc(s.message)}</div>` : ""}
+
 <div class="card"><div class="k">Now</div><div>${esc(s.status)}</div>
 ${s.problem ? `<div class="err">${esc(s.problem)}</div>` : ""}
 ${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
+
+${modeCard}
 
 <div class="card"><div class="k">Only trade markets that close</div>${horizonPicker}</div>
 
@@ -145,6 +186,7 @@ ${modelCard}
 
 ${s.limits.length ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
 
+${viewSwitch}
 <div class="grid">
  <div class="card"><div class="k">Total P&amp;L</div><div class="v ${cls(sum.pnl)}">${esc(money(sum.pnl))}</div></div>
  <div class="card"><div class="k">Today</div><div class="v ${cls(s.today)}">${esc(money(s.today))}</div></div>
