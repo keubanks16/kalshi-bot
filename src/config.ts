@@ -55,6 +55,7 @@ export interface Settings {
   maxPrice: number;
   cryptoCheapBelow: number; // crypto contracts priced under this...
   cryptoCheapMinEdge: number; // ...need at least this much edge
+  cryptoMaxSpread: number; // skip crypto markets whose YES bid-ask spread is wider than this (no real market to price against)
   minVol: number; // annualized vol floor/ceiling
   maxVol: number;
   kellyFraction: number;
@@ -136,6 +137,7 @@ export function loadSettings(env: Env): Settings {
     maxPrice: num(env, "MAX_PRICE", 0.85),
     cryptoCheapBelow: num(env, "CRYPTO_CHEAP_BELOW", 0.3),
     cryptoCheapMinEdge: num(env, "CRYPTO_CHEAP_MIN_EDGE", 0.08),
+    cryptoMaxSpread: num(env, "CRYPTO_MAX_SPREAD", 0.1),
     minVol: num(env, "MIN_VOL", 0.2),
     maxVol: num(env, "MAX_VOL", 2.5),
     kellyFraction: num(env, "KELLY_FRACTION", 0.25),

@@ -378,7 +378,16 @@ export class Engine {
         if (model === null) continue;
         // Humility: the market sees the exact settlement index and we only
         // approximate it, so blend our estimate with the market's own price.
-        const p = blendWithMarket(model, dollars(m, "yes_bid"), dollars(m, "yes_ask"), this.s.modelWeight);
+        // An empty or one-sided book (no bids, a lone offer at 79¢) has no
+        // meaningful midpoint to blend with, and a bid there won't fill.
+        const yb = dollars(m, "yes_bid");
+        const ya = dollars(m, "yes_ask");
+        const thin = yb === null || ya === null || !(yb > 0) || !(ya < 1) || ya - yb > this.s.cryptoMaxSpread + 1e-9;
+        if (thin && !this.store.restingOrders(this.modeFor("crypto")).some((o) => o.ticker === m.ticker)) {
+          if (!best) best = { ticker: m.ticker, action: "hold", reason: "book too thin to price", p: model, price: null, edge: -Infinity };
+          continue;
+        }
+        const p = blendWithMarket(model, yb, ya, this.s.modelWeight);
         const limits = { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge };
 
         // A resting bid tends to fill just as the price turns against it, so

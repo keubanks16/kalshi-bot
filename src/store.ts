@@ -179,17 +179,20 @@ export class Store {
       ticker, mode, ticker, mode,
     ).map((r) => r.side);
   }
-  /** Spend on a market, and how many orders it has had. A maker order counts once however many fills it gets. */
+  /**
+   * Spend on a market, and how many orders it has had. A maker order counts
+   * once however many fills it gets, and not at all if it was cancelled
+   * without filling (so an expired bid doesn't use up the market).
+   */
   marketExposure(ticker: string, mode: string): { cost: number; orders: number } {
-    const t = this.one<{ cost: number; n: number }>("SELECT COALESCE(SUM(cost), 0) AS cost, COUNT(*) AS n FROM trades WHERE ticker = ? AND mode = ? AND order_id IS NULL", ticker, mode);
-    const tm = this.one<{ cost: number }>("SELECT COALESCE(SUM(cost), 0) AS cost FROM trades WHERE ticker = ? AND mode = ? AND order_id IS NOT NULL", ticker, mode);
-    // Live trades and every maker order (paper ones get a made-up id) carry an order_id; count each once.
-    const ids = this.one<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM (SELECT order_id FROM trades WHERE ticker = ? AND mode = ? AND order_id IS NOT NULL UNION SELECT order_id FROM orders WHERE ticker = ? AND mode = ? AND order_id IS NOT NULL)",
-      ticker, mode, ticker, mode,
+    const t = this.one<{ cost: number }>("SELECT COALESCE(SUM(cost), 0) AS cost FROM trades WHERE ticker = ? AND mode = ?", ticker, mode);
+    const taker = this.one<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM trades WHERE ticker = ? AND mode = ? AND (order_id IS NULL OR order_id NOT IN (SELECT order_id FROM orders WHERE order_id IS NOT NULL))",
+      ticker, mode,
     );
+    const maker = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM orders WHERE ticker = ? AND mode = ? AND (status = 'resting' OR filled > 0)", ticker, mode);
     const pend = this.one<{ c: number }>(`SELECT COALESCE(SUM(${PENDING}), 0) AS c FROM orders WHERE ticker = ? AND mode = ? AND status = 'resting'`, ticker, mode);
-    return { cost: Number(t.cost) + Number(tm.cost) + Number(pend.c), orders: Number(t.n) + Number(ids.n) };
+    return { cost: Number(t.cost) + Number(pend.c), orders: Number(taker.n) + Number(maker.n) };
   }
   eventExposure(eventTicker: string, mode: string): number {
     const t = Number(this.one<{ c: number }>("SELECT COALESCE(SUM(cost), 0) AS c FROM trades WHERE event_ticker = ? AND mode = ? AND result IS NULL", eventTicker, mode).c);

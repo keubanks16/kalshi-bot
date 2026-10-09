@@ -58,6 +58,7 @@ function markets() {
       floor_strike: 80000,
       rules_primary: CF_RULES,
       yes_ask_dollars: "0.3000",
+      yes_bid_dollars: "0.2800",
       no_ask_dollars: "0.7200",
       yes_bid_size_fp: "200.00",
       yes_ask_size_fp: "200.00",
@@ -522,13 +523,51 @@ test("maker (live): kill switch cancels resting orders", async () => {
   assert.equal(store.restingOrders().length, 0);
 });
 
-test("maker (live): an order Kalshi already removed stops reserving limits", async () => {
-  const { store, again, book } = liveMaker();
+test("maker (live): an order Kalshi already removed stops reserving limits, and the market can be bid again", async () => {
+  const { store, again, book, calls } = liveMaker();
   await again();
   book.o1 = { ...book.o1, status: "canceled" }; // expired on Kalshi's side
   await again(5);
-  assert.equal(store.restingOrders().length, 0);
-  assert.equal(store.openRisk("live"), 0);
+  assert.equal((store as any).rows("SELECT status FROM orders WHERE id = 1")[0].status, "canceled");
+  assert.ok(store.restingOrders().length <= 1);
+  assert.equal(calls.filter((c) => c.startsWith("post")).length, 2, "re-posted after the unfilled order went away");
+});
+
+test("maker: an expired, unfilled bid doesn't use up the market's one order", async () => {
+  const { store, again } = makerSetup();
+  await again();
+  await again(121); // first bid expires unfilled
+  await again(5);
+  const rows = (store as any).rows("SELECT status FROM orders ORDER BY id");
+  assert.equal(rows[0].status, "canceled");
+  assert.ok(rows.some((r: any) => r.status === "resting"), "a fresh bid was posted");
+  assert.equal(store.marketExposure(BTC, "paper").orders, 1);
+});
+
+test("maker: a filled bid still uses up the market's one order", async () => {
+  const { store, client, again } = makerSetup();
+  await again();
+  client.all[0].yes_ask_dollars = "0.5400";
+  await again(5);
+  assert.equal(store.openTrades().length, 1);
+  client.all[0].yes_ask_dollars = "0.5500";
+  await again(200);
+  assert.equal(store.restingOrders().length, 0, "no second order on the same market");
+});
+
+test("crypto skips markets with an empty or one-sided book", async () => {
+  const { store, client, again, engine } = makerSetup();
+  // like the XRP buckets: no YES bids, one contract offered at 79¢
+  client.all[0].yes_bid_dollars = "0.0000";
+  client.all[0].yes_ask_dollars = "0.7900";
+  await again();
+  assert.equal(store.restingOrders().length + store.openTrades().length, 0);
+  // and a very wide spread is skipped too
+  client.all[0].yes_bid_dollars = "0.3000";
+  client.all[0].yes_ask_dollars = "0.5500";
+  await again(5);
+  assert.equal(store.restingOrders().length + store.openTrades().length, 0);
+  assert.ok(engine.s.cryptoMaxSpread === 0.1);
 });
 
 test("maker: limits hold over many ticks with fills", async () => {

@@ -15,6 +15,7 @@ A bot can only find a good trade when it has a source of truth that's better tha
 - It computes the probability the price finishes past the strike, accounting for Kalshi's 60-second settlement average.
 - If YES or NO is cheaper than that probability by more than `MIN_EDGE` after fees, it buys. It sizes the bet with quarter-Kelly.
 - It only buys contracts priced 15¢–85¢ by default (editable on the dashboard), skipping long shots and near-sure things where the model is least reliable and fees bite hardest.
+- It skips markets with an empty or one-sided book, or a YES spread wider than 10¢ (`CRYPTO_MAX_SPREAD`). There's no real price to compare against there.
 - Contracts under 30¢ (`CRYPTO_CHEAP_BELOW`) need at least 8¢ of edge (`CRYPTO_CHEAP_MIN_EDGE`) instead of `MIN_EDGE`. Cheap long shots were losing more often than the model expected, so they need a bigger cushion.
 - It skips markets that depend on whether a price is touched at any time, since those can't be priced this way.
 
