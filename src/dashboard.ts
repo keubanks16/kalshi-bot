@@ -1,6 +1,7 @@
 // Phone-friendly dashboard HTML. Everything from Kalshi is escaped.
 
 import type { Snapshot } from "./bot.ts";
+import { renderPicks } from "./picks-page.ts";
 
 const esc = (v: unknown) =>
   String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -9,7 +10,8 @@ const money = (x: number) => `${x >= 0 ? "+" : "−"}$${Math.abs(x).toFixed(2)}`
 const cls = (x: number | null) => (x === null ? "" : x >= 0 ? "up" : "down");
 const STRATEGY: Record<string, string> = { crypto: "Crypto", arb: "Arbitrage", ai: "AI", sports: "Sports" };
 
-export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwordSet: boolean }): string {
+export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwordSet: boolean; tab?: "bot" | "picks" }): string {
+  const tab = opts.tab ?? "bot";
   // During a deploy the page can update before the bot does, so tolerate
   // fields an older bot doesn't send yet instead of crashing.
   const s: Snapshot = {
@@ -236,11 +238,54 @@ ${g.books ? `<span>Books: ${esc(g.books)} · Kalshi: ${esc(g.kalshi)}</span><br>
 ${s.limits.length ? `<div class="k" style="margin-top:22px">Shared</div>${limitForm(s.limits, null)}` : ""}`
     : limitForm(s.limits, null);
 
+  const botBody = `<div class="card"><div class="k">Now</div><div>${esc(s.status)}</div>
+${s.problem ? `<div class="err">${esc(s.problem)}</div>` : ""}
+${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
+
+${modeCard}
+
+${switchCard}
+
+<div class="card"><div class="k">Only trade markets that close</div>${horizonPicker}</div>
+
+${modelCard}
+
+${priceCard}
+
+${s.limits.length || s.limitsByMode ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
+
+${testBar}
+${viewSwitch}
+<div class="grid">
+ <div class="card"><div class="k">Total P&amp;L</div><div class="v ${cls(sum.pnl)}">${esc(money(sum.pnl))}</div></div>
+ <div class="card"><div class="k">Today</div><div class="v ${cls(s.today)}">${esc(money(s.today))}</div></div>
+ <div class="card"><div class="k">Win rate</div><div class="v">${winrate}</div><div class="sub">${sum.settled} settled</div></div>
+ <div class="card"><div class="k">Open risk</div><div class="v">$${sum.openCost.toFixed(2)}</div><div class="sub">fees paid $${sum.fees.toFixed(2)}</div></div>
+</div>
+${strat ? `<div class="strat">${strat}</div>` : ""}
+${check}
+${aiCard}
+${sportsCard}
+
+${
+  opts.authed
+    ? `<form method="post" action="/kill" style="margin-top:14px"><input type="hidden" name="on" value="${s.killSwitch ? "off" : "on"}">${
+        s.killSwitch ? `<button class="go">Resume trading</button>` : `<button class="stop">Stop trading (kill switch)</button>`
+      }</form>`
+    : opts.passwordSet
+      ? ""
+      : `<div class="sub warn" style="margin-top:12px">Add a DASHBOARD_PASSWORD secret to change settings and use the kill switch here.</div>`
+}
+
+<h2>Trades</h2><table>${trades}</table>
+<h2>What the bot is seeing</h2><table>${decisions}</table>
+`;
+
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <noscript><meta http-equiv="refresh" content="20"></noscript>
-<title>Kalshi Bot</title>
+<title>${tab === "picks" ? "PrizePicks Finder" : "Kalshi Bot"}</title>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#14171c;--mute:#6b7280;--line:#e5e7eb;--up:#0f8a4f;--down:#c2261d;--accent:#2f5bea;--warn:#b45309}
 @media (prefers-color-scheme:dark){:root{--bg:#0d0f12;--card:#171a1f;--ink:#e8eaed;--mute:#9aa0a6;--line:#262a31;--up:#34c77b;--down:#ff6b5e;--accent:#7b9bff;--warn:#f0a43a}}
@@ -287,55 +332,22 @@ details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .top form{margin:0}button.link{background:none;color:var(--accent);padding:6px 0;width:auto;font-weight:600;font-size:14px}
 .strat{font-size:13px;color:var(--mute);margin-top:4px}.strat b{font-weight:600}
+.tabs{margin-top:12px}
+.slip{border-top:1px solid var(--line);padding:10px 0}.slip:first-of-type{border-top:0}
+.slip ol{margin:6px 0 0;padding-left:20px}.slip li{margin:3px 0}
+.pk td{padding:9px 4px;word-break:normal;overflow-wrap:anywhere}.pk .side{font-weight:700}
+.more{color:var(--up)}.less{color:var(--accent)}
+.pp-ctl{display:flex;gap:8px;margin-top:10px}.pp-ctl form{flex:1;margin:0}
 </style></head><body><main>
 <div class="top"><h1>Kalshi Bot <span class="pill ${esc(s.mode)}">${esc(s.mode === "paper" ? "PAPER" : `LIVE: ${(s.switches ?? []).filter((x) => x.mode && x.mode !== "paper").map((x) => x.label).join(", ") || "on"}`)}</span></h1>${
   opts.authed ? `<form method="post" action="/logout"><button class="link">Sign out</button></form>` : ""
 }</div>
 <div class="sub">${s.alive ? `<span class="up">● running</span>` : `<span class="down">● not running</span>`}${s.killSwitch ? ` · <span class="warn">kill switch on</span>` : ""}</div>
+<div class="seg views tabs"><a href="/" class="${tab === "bot" ? "on" : ""}">Kalshi bot</a><a href="/?tab=picks" class="${tab === "picks" ? "on" : ""}">PrizePicks</a></div>
 
 ${s.message ? `<div class="card msg">${esc(s.message)}</div>` : ""}
 
-<div class="card"><div class="k">Now</div><div>${esc(s.status)}</div>
-${s.problem ? `<div class="err">${esc(s.problem)}</div>` : ""}
-${s.lastError ? `<div class="err">Last error: ${esc(s.lastError)}</div>` : ""}</div>
-
-${modeCard}
-
-${switchCard}
-
-<div class="card"><div class="k">Only trade markets that close</div>${horizonPicker}</div>
-
-${modelCard}
-
-${priceCard}
-
-${s.limits.length || s.limitsByMode ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
-
-${testBar}
-${viewSwitch}
-<div class="grid">
- <div class="card"><div class="k">Total P&amp;L</div><div class="v ${cls(sum.pnl)}">${esc(money(sum.pnl))}</div></div>
- <div class="card"><div class="k">Today</div><div class="v ${cls(s.today)}">${esc(money(s.today))}</div></div>
- <div class="card"><div class="k">Win rate</div><div class="v">${winrate}</div><div class="sub">${sum.settled} settled</div></div>
- <div class="card"><div class="k">Open risk</div><div class="v">$${sum.openCost.toFixed(2)}</div><div class="sub">fees paid $${sum.fees.toFixed(2)}</div></div>
-</div>
-${strat ? `<div class="strat">${strat}</div>` : ""}
-${check}
-${aiCard}
-${sportsCard}
-
-${
-  opts.authed
-    ? `<form method="post" action="/kill" style="margin-top:14px"><input type="hidden" name="on" value="${s.killSwitch ? "off" : "on"}">${
-        s.killSwitch ? `<button class="go">Resume trading</button>` : `<button class="stop">Stop trading (kill switch)</button>`
-      }</form>`
-    : opts.passwordSet
-      ? ""
-      : `<div class="sub warn" style="margin-top:12px">Add a DASHBOARD_PASSWORD secret to change settings and use the kill switch here.</div>`
-}
-
-<h2>Trades</h2><table>${trades}</table>
-<h2>What the bot is seeing</h2><table>${decisions}</table>
+${tab === "picks" ? renderPicks(s, opts, { esc, date, time }) : botBody}
 
 ${
   opts.passwordSet && !opts.authed

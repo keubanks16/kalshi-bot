@@ -1,6 +1,8 @@
 // Settings come from wrangler.jsonc "vars" (plain settings) and Cloudflare
 // secrets (keys and passwords). Every knob that affects money lives here.
 
+import { parsePayouts, type PicksSettings } from "./prizepicks.ts";
+
 export interface Env {
   BOT: DurableObjectNamespace;
   // secrets (set in the Cloudflare dashboard, never in the repo)
@@ -182,6 +184,25 @@ export function loadSettings(env: Env): Settings {
     maxOpenRisk: num(env, "MAX_OPEN_RISK", 50),
     maxDailyLoss: num(env, "MAX_DAILY_LOSS", 25),
     maxOrdersPerMarket: num(env, "MAX_ORDERS_PER_MARKET", 1),
+  };
+}
+
+/** PrizePicks pick finder (dashboard tab). Read-only: it never places entries. */
+export function loadPicksSettings(env: Env): PicksSettings {
+  return {
+    enabled: bool(env, "PRIZEPICKS_ENABLED", true),
+    sports: str(env, "PRIZEPICKS_SPORTS", "americanfootball_ncaaf")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean),
+    intervalMinutes: num(env, "PRIZEPICKS_INTERVAL_MINUTES", 60),
+    dailyCredits: num(env, "PRIZEPICKS_DAILY_CREDITS", 30),
+    regions: str(env, "PRIZEPICKS_REGIONS", "us"),
+    marketsPerGame: num(env, "PRIZEPICKS_MARKETS_PER_GAME", 3),
+    hoursAhead: num(env, "PRIZEPICKS_HOURS_AHEAD", 36),
+    minBooks: num(env, "PRIZEPICKS_MIN_BOOKS", 1),
+    payouts: parsePayouts(str(env, "PRIZEPICKS_POWER_PAYOUTS", "2:3,3:5,4:10,5:20,6:37.5")),
+    timezone: str(env, "BOT_TIMEZONE", "America/New_York"),
   };
 }
 

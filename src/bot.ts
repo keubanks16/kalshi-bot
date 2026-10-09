@@ -3,11 +3,12 @@
 // schedules the next. A once-a-minute cron makes sure the alarm is running.
 
 import { DurableObject } from "cloudflare:workers";
-import { HORIZONS, LIMIT_FIELDS, MODE_LIMIT_FIELDS, SHARED_LIMIT_FIELDS, type LimitSet, STRATEGIES, STRATEGY_SWITCHES, baseUrl, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, type Mode, type Strategy, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
+import { HORIZONS, LIMIT_FIELDS, loadPicksSettings, MODE_LIMIT_FIELDS, SHARED_LIMIT_FIELDS, type LimitSet, STRATEGIES, STRATEGY_SWITCHES, baseUrl, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, type Mode, type Strategy, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
 import { Engine, tradingDay } from "./engine.ts";
 import { KalshiClient, importPrivateKey } from "./kalshi.ts";
 import { PriceFeed } from "./prices.ts";
 import { Store, type Sql } from "./store.ts";
+import { PicksScanner, type PicksView } from "./prizepicks.ts";
 
 export interface Snapshot {
   mode: string;
@@ -28,6 +29,17 @@ export interface Snapshot {
     remaining: number | null;
     games: { game: string; start: string; books: string; kalshi: string; action: string; source: string }[];
     check: { settled: number; expectedWins: number; actualWins: number; avgPrice: number };
+  };
+  picks?: {
+    on: boolean;
+    keySet: boolean;
+    view: PicksView | null;
+    creditsToday: number;
+    creditBudget: number;
+    remaining: number | null;
+    sports: string[];
+    intervalMinutes: number;
+    payouts: Record<number, number>;
   };
   problem: string | null;
   status: string;
@@ -67,6 +79,8 @@ export class Bot extends DurableObject<Env> {
   settings: Settings;
   problem: string | null;
   engine: Engine | null = null;
+  picks: PicksScanner;
+  private picksRunning = false;
   /** Why the engine couldn't start (e.g. a bad API key), shown on the dashboard. */
   startError: string | null = null;
 
@@ -77,6 +91,7 @@ export class Bot extends DurableObject<Env> {
     if (this.store.get("test_since") === null) this.store.set("test_since", String(Date.now() / 1000));
     this.settings = loadSettings(env);
     this.problem = validate(env, this.settings);
+    this.picks = new PicksScanner(loadPicksSettings(env), this.store, String(env.ODDS_API_KEY ?? ""));
   }
 
   private async getEngine(): Promise<Engine> {
@@ -108,6 +123,7 @@ export class Bot extends DurableObject<Env> {
     const wait = this.problem ? 60 : this.settings.pollSeconds; // misconfigured: check back slowly
     await this.ctx.storage.setAlarm(Date.now() + wait * 1000);
     if (this.problem) return;
+    this.runPicks();
 
     // Never run two rounds at once (unless one is clearly stuck).
     if (this.ticking && Date.now() - this.tickStarted < 90_000) return;
@@ -140,6 +156,27 @@ export class Bot extends DurableObject<Env> {
     } finally {
       this.ticking = false;
     }
+  }
+
+  /** PrizePicks finder: read-only and independent of trading, so it runs on its own. */
+  private runPicks(): void {
+    const now = Date.now() / 1000;
+    if (this.picksRunning || !this.picks.due(now)) return;
+    this.picksRunning = true;
+    const job = this.picks
+      .run(now)
+      .catch((e) => {
+        const prev = this.picks.view();
+        this.store.set("picks_view", JSON.stringify({ ...(prev ?? { picks: [], slips: [], linesSeen: 0, priced: 0 }), ts: now, status: `Error: ${(e as Error).message}` }));
+      })
+      .finally(() => (this.picksRunning = false));
+    this.ctx.waitUntil(job);
+  }
+
+  async setPicks(action: string): Promise<void> {
+    if (action === "on" || action === "off") this.store.set("picks_enabled", action);
+    if (action === "refresh" || action === "on") this.store.set("picks_last_ts", "0");
+    this.runPicks();
   }
 
   /** The mode trading right now: dashboard choice if any, else the deployed setting. */
@@ -199,6 +236,17 @@ export class Bot extends DurableObject<Env> {
         remaining: e?.oddsRemaining ?? null,
         games: e?.sportsView ?? [],
         check: this.store.modelCheck(view, "sports", since),
+      },
+      picks: {
+        on: this.picks.enabled(),
+        keySet: !!this.env.ODDS_API_KEY,
+        view: this.picks.view(),
+        creditsToday: this.picks.creditsToday(now),
+        creditBudget: this.picks.s.dailyCredits,
+        remaining: this.picks.oddsRemaining ?? e?.oddsRemaining ?? null,
+        sports: this.picks.s.sports,
+        intervalMinutes: this.picks.s.intervalMinutes,
+        payouts: this.picks.s.payouts,
       },
       ai: {
         on: !!(this.env.ANTHROPIC_API_KEY && this.effective().aiEnabled),

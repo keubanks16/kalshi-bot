@@ -47,7 +47,8 @@ export default {
     if (req.method === "GET" && url.pathname === "/") {
       const snap = await stub.snapshot(url.searchParams.get("view") ?? undefined, url.searchParams.get("all") === "1");
       snap.message = url.searchParams.get("msg");
-      const html = renderDashboard(snap, { authed: await isAuthed(req, env), passwordSet: !!env.DASHBOARD_PASSWORD });
+      const tab = url.searchParams.get("tab") === "picks" ? "picks" : "bot";
+      const html = renderDashboard(snap, { authed: await isAuthed(req, env), passwordSet: !!env.DASHBOARD_PASSWORD, tab });
       return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     }
 
@@ -84,6 +85,15 @@ export default {
       const problem = await stub.setMode(mode, strategy);
       const what = strategy === "all" ? "Everything" : ({ crypto: "Crypto", ai: "AI forecaster", sports: "Sports", arb: "Arbitrage" } as Record<string, string>)[strategy] ?? strategy;
       return homeMsg(problem ?? (mode === "live" ? `LIVE: ${what} now trades real money.` : `${what} is back to paper trading.`));
+    }
+
+    if (req.method === "POST" && url.pathname === "/picks") {
+      if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+      const form = await req.formData();
+      const action = String(form.get("action") ?? "");
+      await stub.setPicks(action);
+      const msg = action === "refresh" ? "Checking PrizePicks now — refresh in a few seconds." : action === "off" ? "PrizePicks finder off." : "PrizePicks finder on.";
+      return new Response(null, { status: 303, headers: { Location: `/?tab=picks&msg=${encodeURIComponent(msg)}` } });
     }
 
     if (req.method === "POST" && url.pathname === "/strategy") {
