@@ -1,7 +1,7 @@
 // The dashboard's PrizePicks tab. Finder only: it never places entries.
 
 import type { Snapshot } from "./bot.ts";
-import { breakEven, type Pick } from "./prizepicks.ts";
+import { breakEven, chanceText, type Pick } from "./prizepicks.ts";
 
 type Fmt = { esc: (v: unknown) => string; date: (t: number) => string; time: (t: number) => string };
 
@@ -69,5 +69,30 @@ export function renderPicks(s: Snapshot, opts: { authed: boolean }, f: Fmt): str
 <table class="pk">${rows}</table>
 <div class="sub" style="margin-top:8px">Chance the pick hits, from the sportsbooks' over/under odds with their margin removed (median across books). Green beats the ${esc(pct(bar))} a 2-pick power play needs. "≥" means no book had PrizePicks' exact line, so the number is a safe minimum from a book line further out. Only standard lines are checked (no goblins or demons).</div></div>`;
 
-  return `${head}\n${slips}\n${table}`;
+  const shot = pp.shot;
+  const KIND: Record<string, string> = { goblin: " (goblin)", demon: " (demon)" };
+  const shotRows = shot?.results?.length
+    ? shot.results
+        .map(
+          (r) => `<tr><td><b>${esc(r.player)}</b> <span class="sub">${esc(r.stat)} ${esc(r.line)}${esc(KIND[r.kind] ?? "")}</span><br>
+${r.side ? `<span class="side ${r.side === "More" ? "more" : "less"}">${esc(r.side)} ${esc(r.line)}</span> · <b>${esc(r.chance ? chanceText(r.chance) : "")}</b><br>` : ""}<span class="${r.tone === "good" ? "up" : r.tone === "bad" ? "down" : r.tone === "meh" ? "warn" : "sub"}">${esc(r.verdict)}</span><br>
+<span class="sub">${esc(r.game)}${r.chance ? ` · ${r.chance.books} book${r.chance.books === 1 ? "" : "s"}${r.chance.exact ? "" : r.chance.bookLine !== null ? `, nearest line ${esc(r.chance.bookLine)}` : ""}` : ""}</span></td></tr>`,
+        )
+        .join("")
+    : "";
+  const upload = !opts.authed
+    ? `<div class="sub" style="margin-top:8px">Sign in to check a screenshot.</div>`
+    : !pp.aiKeySet || !pp.keySet
+      ? `<div class="sub" style="margin-top:8px">Needs the ANTHROPIC_API_KEY and ODDS_API_KEY secrets.</div>`
+      : `<form method="post" action="/picks/shot" enctype="multipart/form-data" class="shot-form" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Reading your screenshot… (about 15 seconds)';">
+<input type="file" name="shot" accept="image/png,image/jpeg,image/webp" required>
+<button class="go">Check these picks</button></form>`;
+  const shotCard = `<div class="card" id="shot"><div class="k">Check a screenshot</div>
+<div class="sub">Upload a PrizePicks screenshot. Claude reads the picks; the chances come from sportsbook odds for the same player, stat and line.</div>
+${upload}
+${shot ? `<div style="margin-top:10px">${esc(shot.status)} <span class="sub">${esc(date(shot.ts))} ${esc(time(shot.ts))}</span></div>` : ""}
+${shotRows ? `<table class="pk">${shotRows}</table>` : ""}
+${shotRows ? `<div class="sub" style="margin-top:8px">A range like 48–55% means the books don't have PrizePicks' exact line, so the chance is somewhere between the nearest book lines. Demons and goblins have their own payouts, so check the multiplier your app shows.</div>` : ""}</div>`;
+
+  return `${shotCard}\n${head}\n${slips}\n${table}`;
 }

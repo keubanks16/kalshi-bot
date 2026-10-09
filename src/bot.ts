@@ -8,7 +8,8 @@ import { Engine, tradingDay } from "./engine.ts";
 import { KalshiClient, importPrivateKey } from "./kalshi.ts";
 import { PriceFeed } from "./prices.ts";
 import { Store, type Sql } from "./store.ts";
-import { PicksScanner, type PicksView } from "./prizepicks.ts";
+import { PicksScanner, type PicksView, type ShotView } from "./prizepicks.ts";
+import { readScreenshot } from "./screenshot.ts";
 
 export interface Snapshot {
   mode: string;
@@ -34,6 +35,8 @@ export interface Snapshot {
     on: boolean;
     keySet: boolean;
     view: PicksView | null;
+    shot: ShotView | null;
+    aiKeySet: boolean;
     creditsToday: number;
     creditBudget: number;
     remaining: number | null;
@@ -70,7 +73,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.10.3";
+export const VERSION = "0.11.0";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
@@ -179,6 +182,25 @@ export class Bot extends DurableObject<Env> {
     this.runPicks();
   }
 
+  /** Read a PrizePicks screenshot with Claude, then price each pick against the sportsbooks. Returns a problem or null. */
+  async checkScreenshot(imageBase64: string, mediaType: string): Promise<string | null> {
+    if (!this.env.ANTHROPIC_API_KEY) return "Add the ANTHROPIC_API_KEY secret to read screenshots.";
+    if (!this.env.ODDS_API_KEY) return "Add the ODDS_API_KEY secret to price picks.";
+    const now = Date.now() / 1000;
+    try {
+      const { picks, cost } = await readScreenshot(imageBase64, mediaType, {
+        apiKey: String(this.env.ANTHROPIC_API_KEY),
+        model: this.settings.aiModel,
+        inputPricePerM: this.settings.aiInputPrice,
+        outputPricePerM: this.settings.aiOutputPrice,
+      });
+      await this.picks.checkShot(picks, now, cost);
+      return null;
+    } catch (e) {
+      return `Couldn't check that screenshot: ${(e as Error).message}`;
+    }
+  }
+
   /** The mode trading right now: dashboard choice if any, else the deployed setting. */
   currentMode(): string {
     if (this.engine) return this.engine.s.mode;
@@ -241,6 +263,8 @@ export class Bot extends DurableObject<Env> {
         on: this.picks.enabled(),
         keySet: !!this.env.ODDS_API_KEY,
         view: this.picks.view(),
+        shot: this.picks.shotView(),
+        aiKeySet: !!this.env.ANTHROPIC_API_KEY,
         creditsToday: this.picks.creditsToday(now),
         creditBudget: this.picks.s.dailyCredits,
         remaining: this.picks.oddsRemaining ?? e?.oddsRemaining ?? null,

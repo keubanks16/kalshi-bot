@@ -49,6 +49,8 @@ A bot can only find a good trade when it has a source of truth that's better tha
 - It only checks when you tap **Check now** on the tab (`PRIZEPICKS_INTERVAL_MINUTES` = 0), so credits are spent only when you're looking. Set it to e.g. 120 to check every 2 hours instead. A second tap within 10 minutes reuses the last results for free.
 - Each game costs stat types × regions credits (3 × 2 = 6 by default), soonest games first, with `PRIZEPICKS_DAILY_CREDITS` (default 300) as a daily safety ceiling.
 
+**Check a screenshot** (top of the PrizePicks tab, needs `ANTHROPIC_API_KEY` and `ODDS_API_KEY`). Upload a PrizePicks screenshot: Claude reads each card (player, stat, line, goblin/demon, teams, which buttons it offers) and nothing else. The chances come from sportsbook odds for the same player, stat and line, priced like the finder, with a plain verdict per pick. Only the games in the screenshot are fetched, from sportsbooks only, so a check costs about 1 credit per stat type per game plus a cent or two of AI. When the books don't have PrizePicks' exact line, the chance is shown as a range or an "at least"/"at most" from the nearest book lines.
+
 **Strategy switches:** the dashboard's **Strategies** card turns Crypto, AI forecaster, Sports and Arbitrage on or off instantly. Open bets stay open and settle normally.
 
 Everything is held to settlement and then marked as a win or loss.

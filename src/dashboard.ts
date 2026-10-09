@@ -338,6 +338,8 @@ details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px
 .pk td{padding:9px 4px;word-break:normal;overflow-wrap:anywhere}.pk .side{font-weight:700}
 .more{color:var(--up)}.less{color:var(--accent)}
 .pp-ctl{display:flex;gap:8px;margin-top:10px}.pp-ctl form{flex:1;margin:0}
+.shot-form{margin-top:10px}.shot-form input[type=file]{padding:10px;background:var(--bg)}
+.shot-form button:disabled{opacity:.7}
 </style></head><body><main>
 <div class="top"><h1>Kalshi Bot <span class="pill ${esc(s.mode)}">${esc(s.mode === "paper" ? "PAPER" : `LIVE: ${(s.switches ?? []).filter((x) => x.mode && x.mode !== "paper").map((x) => x.label).join(", ") || "on"}`)}</span></h1>${
   opts.authed ? `<form method="post" action="/logout"><button class="link">Sign out</button></form>` : ""

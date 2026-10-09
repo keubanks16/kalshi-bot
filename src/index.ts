@@ -34,6 +34,13 @@ async function isAuthed(req: Request, env: Env): Promise<boolean> {
   return !!m && timingSafeEqual(m[1], await sessionToken(pw));
 }
 
+function toBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
 const homeMsg = (msg: string) => new Response(null, { status: 303, headers: { Location: `/?msg=${encodeURIComponent(msg)}` } });
 
 const home = (extraHeaders: Record<string, string> = {}) => new Response(null, { status: 303, headers: { Location: "/", ...extraHeaders } });
@@ -85,6 +92,18 @@ export default {
       const problem = await stub.setMode(mode, strategy);
       const what = strategy === "all" ? "Everything" : ({ crypto: "Crypto", ai: "AI forecaster", sports: "Sports", arb: "Arbitrage" } as Record<string, string>)[strategy] ?? strategy;
       return homeMsg(problem ?? (mode === "live" ? `LIVE: ${what} now trades real money.` : `${what} is back to paper trading.`));
+    }
+
+    if (req.method === "POST" && url.pathname === "/picks/shot") {
+      if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+      const back = (msg: string) => new Response(null, { status: 303, headers: { Location: `/?tab=picks&msg=${encodeURIComponent(msg)}#shot` } });
+      const file = (await req.formData()).get("shot");
+      if (!file || typeof file === "string") return back("Choose a screenshot first.");
+      const type = file.type || "image/jpeg";
+      if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(type)) return back("Use a PNG or JPEG screenshot.");
+      if (file.size > 5 * 1024 * 1024) return back("That image is over 5 MB. Crop it or send a smaller screenshot.");
+      const problem = await stub.checkScreenshot(toBase64(await file.arrayBuffer()), type);
+      return back(problem ?? "Screenshot checked — results below.");
     }
 
     if (req.method === "POST" && url.pathname === "/picks") {
