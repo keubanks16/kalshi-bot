@@ -211,7 +211,7 @@ test("dashboard renders and escapes Kalshi text", async () => {
     {
       mode: "paper", problem: null, status: engine.status, lastError: null, alive: true, killSwitch: false,
       horizon: "day", horizons: [{ key: "day", label: "Within a day" }], summary: store.summary(), today: 0,
-      byStrategy: store.byStrategy(), trades: store.recentTrades(), decisions: store.recentDecisions(), timezone: "America/New_York",
+      byStrategy: store.byStrategy(), trades: store.recentTrades(), decisions: store.recentDecisions(), timezone: "America/New_York", diag: {},
     },
     { authed: true, passwordSet: true },
   );

@@ -100,23 +100,37 @@ export class Engine {
       this.status = `Kalshi asked the bot to slow down — resuming in ${Math.ceil(this.cooldownUntil - now)}s.`;
       return;
     }
+    const started = Date.now();
     try {
       await this.round(now);
       this.rateLimitStrikes = 0;
+      this.rounds++;
+      this.lastRoundMs = Date.now() - started;
+      this.phase = "idle";
     } catch (e) {
-      if (!(e instanceof KalshiError && e.status === 429)) throw e;
+      const where = this.phase;
+      this.phase = "idle";
+      if (!(e instanceof KalshiError && e.status === 429)) {
+        (e as Error).message = `while ${where}: ${(e as Error).message}`;
+        throw e;
+      }
       // Back off 15s, 30s, 60s… up to 5 minutes, instead of hammering Kalshi.
       const wait = Math.min(300, 15 * 2 ** this.rateLimitStrikes++);
       this.cooldownUntil = now + wait;
-      this.status = `Kalshi asked the bot to slow down — resuming in ${wait}s.`;
+      this.status = `Kalshi asked the bot to slow down (while ${where}) — resuming in ${wait}s.`;
     }
   }
 
   cooldownUntil = 0;
   rateLimitStrikes = 0;
+  // diagnostics shown on /health
+  phase = "idle";
+  rounds = 0;
+  lastRoundMs = 0;
 
   private async round(now: number): Promise<void> {
     if (now - this.lastSettle >= 60) {
+      this.phase = "settling trades";
       await this.settle();
       this.lastSettle = now;
     }
@@ -125,7 +139,9 @@ export class Engine {
       return;
     }
     const maxClose = this.maxClose(now);
+    this.phase = "scanning markets";
     await this.scanPage(now, maxClose);
+    this.phase = "pricing crypto";
     if (this.s.cryptoEnabled) await this.runCrypto(now, maxClose);
 
     const label = HORIZONS[this.horizon()].label.toLowerCase();
@@ -219,6 +235,7 @@ export class Engine {
     if (!info || now - info.at > EVENT_CACHE_SECONDS) {
       if (this.eventLookups >= MAX_EVENT_LOOKUPS_PER_TICK) return;
       this.eventLookups++;
+      this.phase = `looking up event ${eventTicker}`;
       const ev = await this.client.getEvent(eventTicker);
       info = {
         exclusive: ev.mutually_exclusive === true,
@@ -266,6 +283,7 @@ export class Engine {
     const due = [...this.series.entries()].filter(([, st]) => st.nextCheck <= now).sort((a, b) => a[1].nextCheck - b[1].nextCheck).slice(0, this.s.seriesPerTick);
 
     for (const [series, st] of due) {
+      this.phase = `pricing ${series}`;
       const markets = (await this.client.getMarkets({ series_ticker: series, status: "open", limit: 200 })).filter(
         (m) => this.inWindow(m, now, maxClose) && this.cryptoAsset(m) && (!m.status || m.status === "active"),
       );

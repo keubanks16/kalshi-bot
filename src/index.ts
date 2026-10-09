@@ -50,7 +50,7 @@ export default {
 
     if (req.method === "GET" && url.pathname === "/health") {
       const s = await stub.snapshot();
-      return Response.json({ alive: s.alive, mode: s.mode, status: s.status, killSwitch: s.killSwitch, horizon: s.horizon, problem: s.problem });
+      return Response.json({ alive: s.alive, mode: s.mode, status: s.status, killSwitch: s.killSwitch, horizon: s.horizon, problem: s.problem, lastError: s.lastError, diag: s.diag });
     }
 
     if (req.method === "POST" && url.pathname === "/login") {

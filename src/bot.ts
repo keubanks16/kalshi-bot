@@ -24,7 +24,10 @@ export interface Snapshot {
   trades: ReturnType<Store["recentTrades"]>;
   decisions: Record<string, any>[];
   timezone: string;
+  diag: Record<string, unknown>;
 }
+
+export const VERSION = "0.3.2";
 
 export class Bot extends DurableObject<Env> {
   store: Store;
@@ -103,6 +106,17 @@ export class Bot extends DurableObject<Env> {
       trades: this.store.recentTrades(30),
       decisions: this.store.recentDecisions(25),
       timezone: tz,
+      diag: {
+        version: VERSION,
+        phase: e?.phase ?? null,
+        rounds: e?.rounds ?? 0,
+        lastRoundMs: e?.lastRoundMs ?? null,
+        roundRunningForMs: this.ticking ? Date.now() - this.tickStarted : 0,
+        cooldownLeftS: e ? Math.max(0, Math.round(e.cooldownUntil - now)) : 0,
+        kalshiRequests: e?.client.requests ?? 0,
+        priceRequests: e?.feed.requests ?? 0,
+        cryptoSeries: e ? [...e.series.keys()] : [],
+      },
     };
   }
 
