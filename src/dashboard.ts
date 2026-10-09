@@ -133,24 +133,8 @@ ${
           .join("")}</div>`
       : "";
 
-  let modeCard = "";
-  if (opts.authed && s.mode === "live") {
-    modeCard = `<div class="card live-card"><div class="k">Trading mode</div><div class="v small down">LIVE — real money</div>
-<form method="post" action="/mode" style="margin-top:10px"><input type="hidden" name="mode" value="paper"><button class="go">Switch back to paper</button></form></div>`;
-  } else if (opts.authed && s.mode === "paper") {
-    const body =
-      s.canGoLive === false
-        ? `<div class="sub">This bot is deployed in demo mode. Change BOT_MODE in wrangler.jsonc to switch.</div>`
-        : s.keysSet === false
-          ? `<div class="sub">Add your Kalshi API key secrets in Cloudflare first.</div>`
-          : `<details><summary>Go live with real money</summary>
-<form method="post" action="/mode" class="golive"><input type="hidden" name="mode" value="live">
-<p class="sub">The bot will place real orders on Kalshi using your account balance, within the spending limits below. Check those limits first. The kill switch and "Switch back to paper" stop it instantly.</p>
-<input type="password" name="password" placeholder="Dashboard password" autocomplete="current-password" required>
-<label class="check"><input type="checkbox" name="confirm" value="yes" required> I understand this trades real money and I can lose it</label>
-<button class="stop">Go live</button></form></details>`;
-    modeCard = `<div class="card"><div class="k">Trading mode</div><div class="v small">Paper — simulated trades</div>${body}</div>`;
-  }
+  // Paper/live is chosen per strategy in the Strategies card below.
+  const modeCard = "";
 
   const pr = s.priceRange;
   const cents = (x: number) => Math.round(x * 100);
@@ -180,17 +164,39 @@ ${
       }</div>`;
 
   const sw = s.switches ?? [];
+  const anyLive = sw.some((x) => x.mode && x.mode !== "paper");
+  const goLiveForm = (strategy: string, label: string) =>
+    s.canGoLive === false
+      ? `<div class="sub">Deployed in demo mode: change BOT_MODE in wrangler.jsonc.</div>`
+      : s.keysSet === false
+        ? `<div class="sub">Add your Kalshi API key secrets to go live.</div>`
+        : `<details><summary>Go live with ${esc(label)}</summary>
+<form method="post" action="/mode" class="golive"><input type="hidden" name="mode" value="live"><input type="hidden" name="strategy" value="${esc(strategy)}">
+<p class="sub">${esc(label)} will place real orders on Kalshi with your account balance, within your spending limits. The other strategies keep doing whatever they're set to. The kill switch or "Switch to paper" stops it instantly.</p>
+<input type="password" name="password" placeholder="Dashboard password" autocomplete="current-password" required>
+<label class="check"><input type="checkbox" name="confirm" value="yes" required> I understand this trades real money and I can lose it</label>
+<button class="stop">Go live with ${esc(label)}</button></form></details>`;
   const switchCard = !sw.length
     ? ""
-    : `<div class="card"><div class="k">Strategies</div>${sw
-        .map(
-          (x) => `<div class="row2 sw"><span>${esc(x.label)}</span>${
-            opts.authed
-              ? `<form method="post" action="/strategy"><input type="hidden" name="key" value="${esc(x.key)}"><input type="hidden" name="on" value="${x.on ? "off" : "on"}"><button class="${x.on ? "pill-on" : "pill-off"}">${x.on ? "On" : "Off"}</button></form>`
-              : `<b class="${x.on ? "up" : "sub"}">${x.on ? "On" : "Off"}</b>`
-          }</div>`,
-        )
-        .join("")}<div class="sub" style="margin-top:6px">Tap to switch a strategy on or off. Open bets stay open and settle normally.</div></div>`;
+    : `<div class="card${anyLive ? " live-card" : ""}"><div class="k">Strategies</div>${sw
+        .map((x) => {
+          const live = x.mode && x.mode !== "paper";
+          const badge = `<span class="pill ${live ? "live" : "paper"}">${live ? "LIVE" : "PAPER"}</span>`;
+          const toggle = opts.authed
+            ? `<form method="post" action="/strategy"><input type="hidden" name="key" value="${esc(x.key)}"><input type="hidden" name="on" value="${x.on ? "off" : "on"}"><button class="${x.on ? "pill-on" : "pill-off"}">${x.on ? "On" : "Off"}</button></form>`
+            : `<b class="${x.on ? "up" : "sub"}">${x.on ? "On" : "Off"}</b>`;
+          const modeCtl = !opts.authed || !x.mode
+            ? ""
+            : live
+              ? `<form method="post" action="/mode"><input type="hidden" name="mode" value="paper"><input type="hidden" name="strategy" value="${esc(x.strategy)}"><button class="link">Switch ${esc(x.label)} to paper</button></form>`
+              : goLiveForm(x.strategy, x.label);
+          return `<div class="strow"><div class="row2 sw"><span>${esc(x.label)} ${x.mode ? badge : ""}</span>${toggle}</div>${modeCtl}</div>`;
+        })
+        .join("")}<div class="sub" style="margin-top:6px">On/Off starts or stops a strategy. PAPER/LIVE picks simulated or real money for it. Open bets stay open and settle normally.</div>${
+        opts.authed && anyLive
+          ? `<form method="post" action="/mode" style="margin-top:10px"><input type="hidden" name="mode" value="paper"><input type="hidden" name="strategy" value="all"><button class="go">Switch everything back to paper</button></form>`
+          : ""
+      }</div>`;
 
   const sp = s.sports;
   const sportsCard = !sp
@@ -264,7 +270,9 @@ details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px
 .views{margin-top:16px}.views a{flex:1;text-align:center;padding:9px 6px;border:1px solid var(--line);border-radius:10px;color:var(--ink);text-decoration:none;font-size:13px;font-weight:600}
 .views a.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .fc td{padding:10px 0}
-.sw{align-items:center;border-bottom:1px solid var(--line);padding:8px 0}.sw form{margin:0}
+.strow{border-bottom:1px solid var(--line);padding:4px 0 8px}.strow details summary{margin-top:2px;font-size:14px}
+.strow form .link{font-size:13px;padding:2px 0}
+.sw{align-items:center;padding:6px 0 2px}.sw form{margin:0}
 .sw button{width:auto;padding:6px 18px;border-radius:99px;font-size:13px}
 .pill-on{background:var(--up);color:#fff}.pill-off{background:var(--bg);color:var(--mute);border:1px solid var(--line)}
 .row2{display:flex;justify-content:space-between;padding:4px 0}
@@ -273,7 +281,7 @@ details summary{cursor:pointer;color:var(--down);font-weight:600;margin-top:10px
 .top form{margin:0}button.link{background:none;color:var(--accent);padding:6px 0;width:auto;font-weight:600;font-size:14px}
 .strat{font-size:13px;color:var(--mute);margin-top:4px}.strat b{font-weight:600}
 </style></head><body><main>
-<div class="top"><h1>Kalshi Bot <span class="pill ${esc(s.mode)}">${esc(s.mode.toUpperCase())}</span></h1>${
+<div class="top"><h1>Kalshi Bot <span class="pill ${esc(s.mode)}">${esc(s.mode === "paper" ? "PAPER" : `LIVE: ${(s.switches ?? []).filter((x) => x.mode && x.mode !== "paper").map((x) => x.label).join(", ") || "on"}`)}</span></h1>${
   opts.authed ? `<form method="post" action="/logout"><button class="link">Sign out</button></form>` : ""
 }</div>
 <div class="sub">${s.alive ? `<span class="up">● running</span>` : `<span class="down">● not running</span>`}${s.killSwitch ? ` · <span class="warn">kill switch on</span>` : ""}</div>

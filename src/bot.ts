@@ -3,7 +3,7 @@
 // schedules the next. A once-a-minute cron makes sure the alarm is running.
 
 import { DurableObject } from "cloudflare:workers";
-import { HORIZONS, LIMIT_FIELDS, STRATEGY_SWITCHES, baseUrl, cleanLimits, cleanPriceRange, cleanSwitches, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
+import { HORIZONS, LIMIT_FIELDS, STRATEGIES, STRATEGY_SWITCHES, baseUrl, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, type Mode, type Strategy, limitsOf, loadSettings, validate, type Env, type Limits, type Settings } from "./config.ts";
 import { Engine, tradingDay } from "./engine.ts";
 import { KalshiClient, importPrivateKey } from "./kalshi.ts";
 import { PriceFeed } from "./prices.ts";
@@ -19,7 +19,7 @@ export interface Snapshot {
   testSince?: number; // stats count trades from here (0 = all history)
   showingAll?: boolean;
   priceRange?: { min: number; max: number; dfltMin: number; dfltMax: number };
-  switches?: { key: string; label: string; on: boolean }[];
+  switches?: { key: string; strategy: string; label: string; on: boolean; mode: string }[];
   sports?: {
     on: boolean;
     status: string;
@@ -57,7 +57,7 @@ export interface Snapshot {
   diag: Record<string, unknown>;
 }
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 
 export const MODEL_WEIGHT_OPTIONS = [0.25, 0.5, 0.75, 1];
 
@@ -149,8 +149,10 @@ export class Bot extends DurableObject<Env> {
     const now = Date.now() / 1000;
     const tz = this.settings.timezone;
     const horizon = e?.horizon() ?? this.store.get("horizon") ?? this.settings.defaultHorizon;
-    const mode = this.currentMode();
-    const views = [...new Set([mode, ...this.store.modesWithTrades()])];
+    const modes = this.strategyModes();
+    const anyReal = Object.values(modes).some((m) => m !== "paper");
+    const mode = anyReal ? (this.settings.mode === "demo" ? "demo" : "live") : "paper";
+    const views = [...new Set([...new Set(Object.values(modes)), ...this.store.modesWithTrades()])].sort((a, b) => (a === "paper" ? 1 : b === "paper" ? -1 : 0));
     const view = viewArg && views.includes(viewArg) ? viewArg : mode;
     const testSince = Number(this.store.get("test_since") ?? 0);
     const since = all ? 0 : testSince;
@@ -177,7 +179,7 @@ export class Bot extends DurableObject<Env> {
       today: this.store.pnlForDay(tradingDay(now, tz), view, since),
       byStrategy: this.store.byStrategy(view, since),
       modelCheck: this.store.modelCheck(view, "crypto", since),
-      switches: STRATEGY_SWITCHES.map((f) => ({ key: f.key, label: f.label, on: this.effective()[f.key] })),
+      switches: STRATEGY_SWITCHES.map((f, i) => ({ key: f.key, strategy: STRATEGIES[i], label: f.label, on: this.effective()[f.key], mode: modes[STRATEGIES[i]] })),
       sports: {
         on: !!(this.env.ODDS_API_KEY && this.effective().sportsEnabled),
         status: e?.sportsStatus ?? (this.env.ODDS_API_KEY ? "Starting…" : "Off: add the ODDS_API_KEY secret (the-odds-api.com)."),
@@ -257,15 +259,32 @@ export class Bot extends DurableObject<Env> {
     this.engine?.applyOverrides();
   }
 
-  /** Switch between paper and live from the dashboard. Returns a problem, or null. */
-  async setMode(mode: string): Promise<string | null> {
+  /** Paper/live for each strategy (each defaults to the deployed mode). */
+  strategyModes(): Record<Strategy, Mode> {
+    if (this.engine) return Object.fromEntries(STRATEGIES.map((k) => [k, this.engine!.modeFor(k)])) as Record<Strategy, Mode>;
+    let saved: Partial<Record<Strategy, Mode>> = {};
+    try {
+      saved = cleanStrategyModes(JSON.parse(this.store.get("strategy_modes") ?? "{}"), this.settings.mode);
+    } catch {}
+    return Object.fromEntries(STRATEGIES.map((k) => [k, saved[k] ?? this.settings.mode])) as Record<Strategy, Mode>;
+  }
+
+  /** Switch one strategy (or "all") between paper and live. Returns a problem, or null. */
+  async setMode(mode: string, strategy = "all"): Promise<string | null> {
     if (mode !== "paper" && mode !== "live") return "Unknown mode.";
+    const targets = strategy === "all" ? STRATEGIES : STRATEGIES.filter((k) => k === strategy);
+    if (!targets.length) return "Unknown strategy.";
     if (mode === "live") {
       if (this.settings.mode === "demo") return "This bot is deployed in demo mode; change BOT_MODE in wrangler.jsonc instead.";
       if (!this.keysSet()) return "Add your Kalshi API key secrets before going live.";
     }
-    this.store.set("mode_override", mode);
-    this.store.set("mode", mode);
+    let cur: Record<string, string> = {};
+    try {
+      cur = cleanStrategyModes(JSON.parse(this.store.get("strategy_modes") ?? "{}"), this.settings.mode) as Record<string, string>;
+    } catch {}
+    for (const k of targets) cur[k] = mode;
+    this.store.set("strategy_modes", JSON.stringify(cur));
+    this.store.set("mode_override", "paper"); // the old all-or-nothing switch is retired
     this.engine?.applyOverrides();
     return null;
   }

@@ -29,6 +29,8 @@ export const HORIZONS: Record<string, { label: string; short: string; seconds: n
 };
 
 export type Mode = "paper" | "demo" | "live";
+export type Strategy = "crypto" | "ai" | "sports" | "arb";
+export const STRATEGIES: Strategy[] = ["crypto", "ai", "sports", "arb"];
 
 export interface Settings {
   mode: Mode;
@@ -244,5 +246,19 @@ export function cleanSwitches(raw: unknown): Partial<Record<SwitchKey, boolean>>
   const r = (raw ?? {}) as Record<string, unknown>;
   const out: Partial<Record<SwitchKey, boolean>> = {};
   for (const f of STRATEGY_SWITCHES) if (typeof r[f.key] === "boolean") out[f.key] = r[f.key] as boolean;
+  return out;
+}
+
+/**
+ * Per-strategy paper/live choice. "live" is only kept when the bot is deployed
+ * against the real exchange (not demo); in demo, real orders go to demo.
+ */
+export function cleanStrategyModes(raw: unknown, baseMode: Mode): Partial<Record<Strategy, Mode>> {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const out: Partial<Record<Strategy, Mode>> = {};
+  for (const k of STRATEGIES) {
+    if (r[k] === "paper") out[k] = "paper";
+    else if (r[k] === "live") out[k] = baseMode === "demo" ? "demo" : "live";
+  }
   return out;
 }

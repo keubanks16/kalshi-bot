@@ -74,14 +74,16 @@ export default {
       if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
       const form = await req.formData();
       const mode = String(form.get("mode") ?? "");
+      const strategy = String(form.get("strategy") ?? "all");
       if (mode === "live") {
         // Real money: ask for the password again and an explicit confirmation.
         const pw = env.DASHBOARD_PASSWORD ?? "";
         if (!pw || !timingSafeEqual(String(form.get("password") ?? ""), pw)) return homeMsg("Wrong password — still in paper mode.");
         if (form.get("confirm") !== "yes") return homeMsg("Tick the box to confirm real money — still in paper mode.");
       }
-      const problem = await stub.setMode(mode);
-      return homeMsg(problem ?? (mode === "live" ? "LIVE: the bot now trades real money." : "Back to paper trading."));
+      const problem = await stub.setMode(mode, strategy);
+      const what = strategy === "all" ? "Everything" : ({ crypto: "Crypto", ai: "AI forecaster", sports: "Sports", arb: "Arbitrage" } as Record<string, string>)[strategy] ?? strategy;
+      return homeMsg(problem ?? (mode === "live" ? `LIVE: ${what} now trades real money.` : `${what} is back to paper trading.`));
     }
 
     if (req.method === "POST" && url.pathname === "/strategy") {

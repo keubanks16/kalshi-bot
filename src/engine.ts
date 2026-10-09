@@ -7,7 +7,7 @@
 // Work per tick is capped so it fits Cloudflare's per-invocation subrequest
 // limit; the full market list is covered over several ticks.
 
-import { HORIZONS, cleanLimits, cleanPriceRange, cleanSwitches, placesOrders, type Settings } from "./config.ts";
+import { HORIZONS, cleanLimits, cleanPriceRange, cleanStrategyModes, cleanSwitches, type Mode, type Settings, type Strategy } from "./config.ts";
 import { KalshiClient, KalshiError, askSize, dollars, seriesOf, ts, type Market } from "./kalshi.ts";
 import { decideBinary, fitToRoom, fmtEdge, planNoArb, probYesForStrike, sideOf, takerFee, SUPPORTED_STRIKES } from "./model.ts";
 import type { PriceFeed } from "./prices.ts";
@@ -30,7 +30,7 @@ interface SeriesState {
 }
 
 interface BuyOrder {
-  strategy: "crypto" | "arb" | "ai" | "sports";
+  strategy: Strategy;
   market: Market;
   side: "yes" | "no";
   contracts: number;
@@ -78,7 +78,9 @@ export class Engine {
   status = "starting";
   lastError: string | null = null;
   heartbeat = 0;
-  private bankrollCache: { value: number; at: number } | null = null;
+  private bankrollCache = new Map<string, { value: number; at: number }>();
+  /** Per-strategy paper/live choice from the dashboard. */
+  strategyModes: Partial<Record<Strategy, Mode>> = {};
   private eventLookups = 0;
 
   constructor(s: Settings, client: KalshiClient, feed: PriceFeed, store: Store, clock: () => number = () => Date.now() / 1000) {
@@ -127,7 +129,12 @@ export class Engine {
       switches = cleanSwitches(JSON.parse(this.store.get("strategies") ?? "{}"));
     } catch {}
     this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride, ...(range ?? {}), ...switches };
-    if (prevMode && prevMode !== this.s.mode) this.bankrollCache = null;
+    if (prevMode && prevMode !== this.s.mode) this.bankrollCache.clear();
+    try {
+      this.strategyModes = cleanStrategyModes(JSON.parse(this.store.get("strategy_modes") ?? "{}"), this.base.mode);
+    } catch {
+      this.strategyModes = {};
+    }
   }
 
   async tick(): Promise<void> {
@@ -135,7 +142,7 @@ export class Engine {
     const now = this.clock();
     this.heartbeat = now;
     this.eventLookups = 0;
-    this.bankrollCache = this.bankrollCache && now - this.bankrollCache.at < 60 ? this.bankrollCache : null;
+    for (const [k, v] of this.bankrollCache) if (now - v.at >= 60) this.bankrollCache.delete(k);
 
     if (now < this.cooldownUntil) {
       this.status = `Kalshi asked the bot to slow down — resuming in ${Math.ceil(this.cooldownUntil - now)}s.`;
@@ -306,7 +313,7 @@ export class Engine {
       const size = askSize(m, "no");
       return noAsk === null || size === null ? [] : [{ ticker: m.ticker, noAsk, size }];
     });
-    const room = this.room(eventTicker, null);
+    const room = this.room(eventTicker, null, this.modeFor("arb"));
     const plan = planNoArb(legs, this.s.takerFeeRate, this.s.minArbProfit, this.s.maxContractsPerOrder, room);
     if (!plan) return;
 
@@ -314,7 +321,7 @@ export class Engine {
     const byTicker = new Map(active.map((m) => [m.ticker, m]));
     for (const l of plan.legs) {
       const legCost = plan.sets * l.noAsk + takerFee(plan.sets, l.noAsk, this.s.takerFeeRate);
-      if (this.room(eventTicker, l.ticker) < legCost) return;
+      if (this.room(eventTicker, l.ticker, this.modeFor("arb")) < legCost) return;
     }
 
     const note = `arb ${eventTicker}: ${plan.legs.length} NO legs x${plan.sets}, locks in +$${plan.profit.toFixed(2)}`;
@@ -347,7 +354,7 @@ export class Engine {
       }
 
       const spot = await this.feed.spot(st.asset);
-      const bankroll = await this.bankroll();
+      const bankroll = await this.bankroll(this.modeFor("crypto"));
       let best: { ticker: string; action: string; reason: string; p: number; price: number | null; edge: number } | null = null;
       let nearest = Infinity;
 
@@ -397,7 +404,7 @@ export class Engine {
     const creditKey = `odds_credits_${day}`;
     let used = Number(this.store.get(creditKey) ?? 0);
     const perCall = this.s.sportsRegions.split(",").filter(Boolean).length;
-    const bankroll = await this.bankroll();
+    const bankroll = await this.bankroll(this.modeFor("sports"));
     const latestStart = maxClose ?? now + 7 * 86400;
     const view: typeof this.sportsView = [];
     let checked = 0;
@@ -445,7 +452,7 @@ export class Engine {
         const label = `${game.away_team} @ ${game.home_team}`;
         const startLabel = new Date(start * 1000).toISOString();
 
-        if ((ev.markets ?? []).some((m) => this.store.openSides(m.ticker, this.s.mode).length)) {
+        if ((ev.markets ?? []).some((m) => this.store.openSides(m.ticker, this.modeFor("sports")).length)) {
           view.push({ game: label, start: startLabel, books: "", kalshi: "", action: "already holding a position", source: fair.source });
           continue;
         }
@@ -515,7 +522,7 @@ export class Engine {
 
   /** Trust in AI shrinks if its settled bets win less often than it predicted. */
   aiTrustFactor(): number {
-    const mc = this.store.modelCheck(this.s.mode, "ai");
+    const mc = this.store.modelCheck(this.modeFor("ai"), "ai");
     if (mc.settled < 20 || mc.expectedWins <= 0) return 1;
     return Math.min(1, Math.max(0.5, mc.actualWins / mc.expectedWins));
   }
@@ -538,7 +545,7 @@ export class Engine {
     const pick = [...this.aiCandidates.values()]
       .filter((m) => (maxClose === null || ts(m.close_time) <= maxClose) && this.aiWorthy(m, now))
       .filter((m) => now - this.store.lastForecastTs(m.ticker) >= this.s.aiRefreshHours * 3600)
-      .filter((m) => this.store.openSides(m.ticker, this.s.mode).length === 0)
+      .filter((m) => this.store.openSides(m.ticker, this.modeFor("ai")).length === 0)
       .sort((a, b) => volume24h(b) - volume24h(a))[0];
     this.lastAiAt = now;
     if (!pick) {
@@ -589,7 +596,7 @@ export class Engine {
     if (f.confidence === "low") {
       action = "no bet: low confidence";
     } else {
-      const d = decideBinary(p, ask, dollars(m, "no_ask"), await this.bankroll(), { ...this.s, minEdge: this.s.aiMinEdge });
+      const d = decideBinary(p, ask, dollars(m, "no_ask"), await this.bankroll(this.modeFor("ai")), { ...this.s, minEdge: this.s.aiMinEdge });
       const side = sideOf(d);
       if (side && d.price !== undefined) {
         const filled = await this.buy({ strategy: "ai", market: { ...pick, ...m }, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, note: f.summary });
@@ -604,30 +611,36 @@ export class Engine {
   }
 
   // ------------------------------------------------------------ execution
-  async bankroll(): Promise<number> {
-    if (this.bankrollCache) return this.bankrollCache.value;
+  /** Paper or live for one strategy: its own dashboard setting, else the bot's overall mode. */
+  modeFor(strategy: Strategy): Mode {
+    return this.strategyModes[strategy] ?? this.s.mode;
+  }
+
+  async bankroll(mode: Mode = this.s.mode): Promise<number> {
+    const hit = this.bankrollCache.get(mode);
+    if (hit) return hit.value;
     let value: number;
-    if (placesOrders(this.s)) {
+    if (mode !== "paper") {
       // Never size off more than the configured bankroll, even if the account holds more.
       value = Math.min(await this.client.getBalance(), this.s.bankroll);
     } else {
-      const sum = this.store.summary(this.s.mode);
+      const sum = this.store.summary("paper");
       value = this.s.bankroll + sum.pnl - sum.openCost;
     }
-    this.bankrollCache = { value, at: this.clock() };
+    this.bankrollCache.set(mode, { value, at: this.clock() });
     return value;
   }
 
-  /** Dollars the risk limits still allow on this event (and market, if given). */
-  room(eventTicker: string, ticker: string | null): number {
+  /** Dollars the risk limits still allow on this event (and market, if given), counted within one mode. */
+  room(eventTicker: string, ticker: string | null, mode: Mode = this.s.mode): number {
     const s = this.s;
     let room = Math.min(
-      s.maxCostPerEvent - this.store.eventExposure(eventTicker, s.mode),
-      s.maxOpenRisk - this.store.openRisk(s.mode),
-      s.maxDailyLoss - this.store.dayLoss(tradingDay(this.clock(), s.timezone), s.mode),
+      s.maxCostPerEvent - this.store.eventExposure(eventTicker, mode),
+      s.maxOpenRisk - this.store.openRisk(mode),
+      s.maxDailyLoss - this.store.dayLoss(tradingDay(this.clock(), s.timezone), mode),
     );
     if (ticker) {
-      const ex = this.store.marketExposure(ticker, s.mode);
+      const ex = this.store.marketExposure(ticker, mode);
       if (ex.orders >= s.maxOrdersPerMarket) return 0;
       room = Math.min(room, s.maxCostPerMarket - ex.cost, s.maxCostPerOrder);
     }
@@ -637,15 +650,16 @@ export class Engine {
   /** Place (or simulate) a buy within every limit. Returns contracts filled. */
   async buy(o: BuyOrder): Promise<number> {
     const m = o.market;
+    const mode = this.modeFor(o.strategy);
     // Never bet against our own open position on the same market.
-    if (this.store.openSides(m.ticker, this.s.mode).some((side) => side !== o.side)) return 0;
-    const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker), this.s.takerFeeRate);
+    if (this.store.openSides(m.ticker, mode).some((side) => side !== o.side)) return 0;
+    const contracts = fitToRoom(o.contracts, o.price, this.room(m.event_ticker, m.ticker, mode), this.s.takerFeeRate);
     if (contracts < 1) return 0;
 
     let filled: number;
     let fee: number;
     let orderId: string | null = null;
-    if (placesOrders(this.s)) {
+    if (mode !== "paper") {
       try {
         const order = await this.client.createOrder(m.ticker, o.side, contracts, o.price);
         orderId = order.order_id ?? null;
@@ -667,7 +681,7 @@ export class Engine {
     this.store.addTrade({
       ts: now,
       day: tradingDay(now, this.s.timezone),
-      mode: this.s.mode,
+      mode,
       strategy: o.strategy,
       ticker: m.ticker,
       event_ticker: m.event_ticker,
@@ -682,7 +696,7 @@ export class Engine {
       order_id: orderId,
       close_ts: ts(m.close_time),
     });
-    this.bankrollCache = null;
+    this.bankrollCache.delete(mode);
     return filled;
   }
 }

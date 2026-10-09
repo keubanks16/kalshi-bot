@@ -236,20 +236,48 @@ test("switching to live keeps paper results and risk separate", async () => {
   assert.equal(engine.s.mode, "paper");
 });
 
-test("dashboard: go-live form for paper, switch-back for live, results tabs", () => {
+test("dashboard: per-strategy go-live forms, switch-back and results tabs", () => {
   const base = {
     problem: null, status: "ok", lastError: null, alive: true, killSwitch: false, horizon: "day",
     horizons: [], limits: [], summary: { trades: 0, settled: 0, wins: 0, pnl: 0, fees: 0, openCost: 0 }, today: 0,
     byStrategy: [], trades: [], decisions: [], timezone: "America/New_York", diag: {}, canGoLive: true, keysSet: true,
   } as any;
-  const paper = renderDashboard({ ...base, mode: "paper", views: ["paper"] }, { authed: true, passwordSet: true });
-  assert.ok(paper.includes("Go live with real money") && paper.includes('name="confirm"'));
-  const live = renderDashboard({ ...base, mode: "live", views: ["live", "paper"], view: "live" }, { authed: true, passwordSet: true });
-  assert.ok(live.includes("Switch back to paper") && live.includes("?view=paper"));
-  const noKeys = renderDashboard({ ...base, mode: "paper", keysSet: false }, { authed: true, passwordSet: true });
+  const sw = (cryptoMode: string) => [
+    { key: "cryptoEnabled", strategy: "crypto", label: "Crypto", on: true, mode: cryptoMode },
+    { key: "aiEnabled", strategy: "ai", label: "AI forecaster", on: true, mode: "paper" },
+  ];
+  const paper = renderDashboard({ ...base, mode: "paper", views: ["paper"], switches: sw("paper") }, { authed: true, passwordSet: true });
+  assert.ok(paper.includes("Go live with Crypto") && paper.includes("Go live with AI forecaster"));
+  assert.ok(paper.includes('name="strategy" value="crypto"') && paper.includes('name="confirm"'));
+
+  const mixed = renderDashboard({ ...base, mode: "live", view: "live", views: ["live", "paper"], switches: sw("live") }, { authed: true, passwordSet: true });
+  assert.ok(mixed.includes("LIVE: Crypto"), "header names the live strategy");
+  assert.ok(mixed.includes("Switch Crypto to paper") && mixed.includes("Go live with AI forecaster"));
+  assert.ok(mixed.includes("Switch everything back to paper") && mixed.includes("?view=paper"));
+
+  const noKeys = renderDashboard({ ...base, mode: "paper", keysSet: false, switches: sw("paper") }, { authed: true, passwordSet: true });
   assert.ok(!noKeys.includes('name="confirm"'));
-  const signedOut = renderDashboard({ ...base, mode: "paper" }, { authed: false, passwordSet: true });
+  const signedOut = renderDashboard({ ...base, mode: "paper", switches: sw("paper") }, { authed: false, passwordSet: true });
   assert.ok(!signedOut.includes("Go live"));
+});
+
+test("crypto can trade live while the other strategies stay on paper", async () => {
+  const { engine, store, client } = setup();
+  const orders: any[] = [];
+  (client as any).createOrder = async (ticker: string, side: string, count: number, price: number) => {
+    orders.push({ ticker, side, count, price });
+    return { order_id: "o1", fill_count: count, taker_fees_dollars: "0.05" };
+  };
+  (client as any).getBalance = async () => 500;
+  store.set("strategy_modes", JSON.stringify({ crypto: "live" }));
+  await engine.tick();
+  const trades = store.openTrades();
+  const crypto = trades.filter((t) => t.strategy === "crypto");
+  const arb = trades.filter((t) => t.strategy === "arb");
+  assert.ok(crypto.length >= 1 && crypto.every((t) => t.mode === "live"), "crypto trades are live");
+  assert.ok(arb.length === 3 && arb.every((t) => t.mode === "paper"), "arbitrage stays paper");
+  assert.equal(orders.length, crypto.length, "only crypto sent real orders");
+  assert.equal(engine.modeFor("arb"), "paper");
 });
 
 test("model check counts expected vs actual wins", async () => {
