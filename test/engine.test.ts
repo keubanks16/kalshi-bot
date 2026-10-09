@@ -277,6 +277,8 @@ test("dashboard renders and escapes Kalshi text", async () => {
   assert.ok(html.includes("KXFEDDEC-26"));
   assert.ok(!html.includes("<script>x"));
   assert.ok(html.includes('action="/logout"'));
+  assert.match(html, /Bet \$\d+\.\d{2}/);
+  assert.match(html, /pays \$\d+\.00 if right/);
   assert.ok(html.includes('action="/model"') && html.includes(">50%<"));
   assert.match(html, /closes (today|tomorrow|[A-Z][a-z]{2} \d+) \d{1,2}:\d{2}/);
 });
