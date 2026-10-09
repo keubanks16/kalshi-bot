@@ -106,26 +106,41 @@ export interface BinaryLimits {
   kellyFraction: number;
   takerFeeRate: number;
   maxContractsPerOrder: number;
+  /** Contracts priced below this need at least cheapMinEdge (long shots are where the model is least reliable). */
+  cheapBelow?: number;
+  cheapMinEdge?: number;
+}
+
+/** The edge a side must clear at this ask: stricter for cheap long shots when configured. */
+export function requiredEdge(ask: number, s: BinaryLimits): number {
+  return s.cheapBelow !== undefined && s.cheapMinEdge !== undefined && ask < s.cheapBelow ? Math.max(s.minEdge, s.cheapMinEdge) : s.minEdge;
 }
 
 /** Given a fair P(YES) and the asks, pick the better side if its after-fee edge clears the bar, and size it. */
 export function decideBinary(pYes: number, yesAsk: number | null, noAsk: number | null, bankroll: number, s: BinaryLimits): Decision {
   const hold = (reason: string, extra: Partial<Decision> = {}): Decision => ({ action: "hold", reason, contracts: 0, edge: 0, pYes, ...extra });
 
-  let best: { edge: number; side: "yes" | "no"; prob: number; ask: number } | null = null;
+  type Pick = { edge: number; need: number; side: "yes" | "no"; prob: number; ask: number };
+  let best: Pick | null = null; // highest edge, for the log
+  let pick: Pick | null = null; // highest edge that clears its own bar
   for (const [side, prob, ask] of [
     ["yes", pYes, yesAsk],
     ["no", 1 - pYes, noAsk],
   ] as const) {
     if (ask === null || !(ask >= s.minPrice && ask <= s.maxPrice)) continue;
     const feePer = takerFee(100, ask, s.takerFeeRate) / 100;
-    const edge = prob - ask - feePer;
-    if (!best || edge > best.edge) best = { edge, side, prob, ask };
+    const c: Pick = { edge: prob - ask - feePer, need: requiredEdge(ask, s), side, prob, ask };
+    if (!best || c.edge > best.edge) best = c;
+    if (c.edge >= c.need && (!pick || c.edge > pick.edge)) pick = c;
   }
   if (!best) return hold("no tradable price in range");
 
+  if (!pick) {
+    const cheap = best.need > s.minEdge && best.edge >= s.minEdge;
+    return hold(cheap ? `edge ${fmtEdge(best.edge)} on ${best.side} @ $${best.ask.toFixed(2)}, long shot needs ${fmtEdge(best.need)}` : `best edge ${fmtEdge(best.edge)} on ${best.side}`, { price: best.ask, edge: best.edge });
+  }
+  best = pick;
   const extra = { price: best.ask, edge: best.edge };
-  if (best.edge < s.minEdge) return hold(`best edge ${fmtEdge(best.edge)} on ${best.side}`, extra);
 
   const spend = s.kellyFraction * kellyFraction(best.prob, best.ask) * bankroll;
   const contracts = Math.min(Math.floor(spend / best.ask), s.maxContractsPerOrder);

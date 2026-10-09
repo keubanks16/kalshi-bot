@@ -15,6 +15,7 @@ A bot can only find a good trade when it has a source of truth that's better tha
 - It computes the probability the price finishes past the strike, accounting for Kalshi's 60-second settlement average.
 - If YES or NO is cheaper than that probability by more than `MIN_EDGE` after fees, it buys. It sizes the bet with quarter-Kelly.
 - It only buys contracts priced 15¢–85¢ by default (editable on the dashboard), skipping long shots and near-sure things where the model is least reliable and fees bite hardest.
+- Contracts under 30¢ (`CRYPTO_CHEAP_BELOW`) need at least 8¢ of edge (`CRYPTO_CHEAP_MIN_EDGE`) instead of `MIN_EDGE`. Cheap long shots were losing more often than the model expected, so they need a bigger cushion.
 - It skips markets that depend on whether a price is touched at any time, since those can't be priced this way.
 
 **2. Arbitrage on any market** — some events have outcomes where at most one can win, like which month the Fed cuts rates. If the YES bids across those outcomes add up to more than $1, buying NO on each one locks in a profit whatever happens.
@@ -121,6 +122,7 @@ Run paper for at least a few days first, check the model-check cards, and set sm
 All are in `wrangler.jsonc` → `vars`.
 
 - `MIN_EDGE` — the crypto edge needed after fees. Higher means fewer, more confident trades.
+- `CRYPTO_CHEAP_BELOW` / `CRYPTO_CHEAP_MIN_EDGE` — crypto contracts priced under the first (default 0.30) need at least the second as edge (default 0.08).
 - `MIN_ARB_PROFIT` — the locked-in profit needed per arbitrage set.
 - `CRYPTO_ENABLED` / `ARB_ENABLED` — turn either strategy off.
 - `CRYPTO_ASSETS` — which coins to trade.

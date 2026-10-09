@@ -94,3 +94,23 @@ test("ewma vol of a quiet series is small, noisy is bigger", () => {
   const noisy = Array.from({ length: 60 }, (_, i) => 80000 * (1 + 0.002 * Math.sin(i)));
   assert.ok(ewmaVol(quiet) < ewmaVol(noisy));
 });
+
+test("cheap long shots need a bigger edge when configured", () => {
+  const strict = { ...limits, cheapBelow: 0.3, cheapMinEdge: 0.08 };
+  // NO @ 23¢ with fair 30% → ~+0.057 after fees: buys at the normal bar, holds under the long-shot bar
+  assert.equal(decideBinary(0.7, 0.8, 0.23, 100, limits).action, "buy_no");
+  const held = decideBinary(0.7, 0.8, 0.23, 100, strict);
+  assert.equal(held.action, "hold");
+  assert.match(held.reason, /long shot needs/);
+  // A big enough edge on a cheap contract still trades
+  assert.equal(decideBinary(0.6, 0.8, 0.23, 100, strict).action, "buy_no");
+  // Mid-priced contracts are unaffected
+  assert.equal(decideBinary(0.75, 0.6, 0.42, 100, strict).action, "buy_yes");
+});
+
+test("picks the side that clears its own bar, not just the larger edge", () => {
+  const strict = { ...limits, cheapBelow: 0.3, cheapMinEdge: 0.2 };
+  // YES @ 20¢ has the larger edge but fails the long-shot bar; NO @ 45¢ clears the normal bar
+  const d = decideBinary(0.3, 0.2, 0.45, 100, { ...strict, minPrice: 0.05 });
+  assert.notEqual(d.action, "buy_yes");
+});

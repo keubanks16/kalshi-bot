@@ -53,6 +53,8 @@ export interface Settings {
   minSecondsElapsed: number; // ...or right after it opens
   minPrice: number;
   maxPrice: number;
+  cryptoCheapBelow: number; // crypto contracts priced under this...
+  cryptoCheapMinEdge: number; // ...need at least this much edge
   minVol: number; // annualized vol floor/ceiling
   maxVol: number;
   kellyFraction: number;
@@ -128,6 +130,8 @@ export function loadSettings(env: Env): Settings {
     minSecondsElapsed: num(env, "MIN_SECONDS_ELAPSED", 60),
     minPrice: num(env, "MIN_PRICE", 0.15),
     maxPrice: num(env, "MAX_PRICE", 0.85),
+    cryptoCheapBelow: num(env, "CRYPTO_CHEAP_BELOW", 0.3),
+    cryptoCheapMinEdge: num(env, "CRYPTO_CHEAP_MIN_EDGE", 0.08),
     minVol: num(env, "MIN_VOL", 0.2),
     maxVol: num(env, "MAX_VOL", 2.5),
     kellyFraction: num(env, "KELLY_FRACTION", 0.25),

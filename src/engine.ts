@@ -372,7 +372,7 @@ export class Engine {
         // approximate it, so blend our estimate with the market's own price.
         const p = blendWithMarket(model, dollars(m, "yes_bid"), dollars(m, "yes_ask"), this.s.modelWeight);
 
-        const d = decideBinary(p, dollars(m, "yes_ask"), dollars(m, "no_ask"), bankroll, this.s);
+        const d = decideBinary(p, dollars(m, "yes_ask"), dollars(m, "no_ask"), bankroll, { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge });
         const side = sideOf(d);
         let reason = d.reason;
         if (side && d.price !== undefined) {
