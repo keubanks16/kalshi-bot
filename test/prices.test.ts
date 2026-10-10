@@ -231,3 +231,18 @@ test("CF volatility ignores history before a gap (bot was down), so a jump acros
   for (let i = 0; i <= 20 * 6; i++) g.recordCf("BTC", 120, now - 20 * 60_000 + i * 10_000);
   assert.equal(g.cfVolatility("BTC", now), null, "only 20 unbroken minutes: not enough yet");
 });
+
+test("CF volatility remembers a recent spike even after the last 20 minutes go calm", () => {
+  const now = Date.now();
+  const f = new PriceFeed((async () => new Response("[]")) as any, async () => new FakeSocket() as any);
+  // 170 unbroken minutes: a sharp 1% jump 150 minutes ago, calm since
+  let v = 2500;
+  for (let i = 0; i <= 170 * 6; i++) {
+    const t = now - 170 * 60_000 + i * 10_000;
+    if (i === 20 * 6) v *= 1.01;
+    f.recordCf("ETH", v * (1 + (i % 12 < 6 ? 0 : 2e-5)), t);
+  }
+  const vol = f.cfVolatility("ETH", now)!;
+  // fast-only EWMA has decayed to ~0.15; the steady 3-hour reading keeps the jump (~0.55)
+  assert.ok(vol > 0.4, `vol ${vol} should still reflect the jump`);
+});

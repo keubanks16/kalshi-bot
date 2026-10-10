@@ -118,6 +118,20 @@ export const STREAMS: Record<string, StreamDef> = {
   },
 };
 
+/** Plain (equal-weight) annualized realized volatility of evenly spaced prices. */
+export function realizedVol(prices: number[], secondsPerBar: number): number {
+  let sum = 0;
+  let n = 0;
+  for (let i = 1; i < prices.length; i++) {
+    if (prices[i - 1] > 0 && prices[i] > 0) {
+      const r = Math.log(prices[i] / prices[i - 1]);
+      sum += r * r;
+      n++;
+    }
+  }
+  return n ? Math.sqrt(((sum / n) * 365 * 86400) / secondsPerBar) : 0;
+}
+
 /** CF Benchmarks Real-Time Index ids on Kalshi's 5Hz feed: the exact values Kalshi settles on. */
 export const CF_INDEX: Record<string, string> = { BTC: "BRTI", ETH: "ETHUSD_RTI", SOL: "SOLUSD_RTI", XRP: "XRPUSD_RTI", DOGE: "DOGEUSD_RTI" };
 const CF_FRESH_MS = 3_000; // use the CF value only if a tick arrived this recently
@@ -283,7 +297,11 @@ export class PriceFeed {
       }
     }
     if (perMinute.length < 30) return null;
-    return ewmaVol(perMinute, 60, 20);
+    // The larger of a fast reading (20-min half-life) and a steady one (plain
+    // realized vol over the whole unbroken stretch, up to 3 hours): on quiet
+    // days both are low, and right after a spike the steady one keeps the bot
+    // from acting as if nothing happened once the last 20 minutes go calm.
+    return Math.max(ewmaVol(perMinute, 60, 20), realizedVol(perMinute, 60));
   }
 
   /** One sample per minute of the CF history, for saving across restarts: { asset: [[unixSec, value], ...] }. */
