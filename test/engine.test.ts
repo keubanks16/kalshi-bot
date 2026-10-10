@@ -1015,3 +1015,87 @@ test("chase: off when MAKER_MAX_CHASE is 0", async () => {
   await again(10);
   assert.equal(store.restingOrders()[0].price, 0.54);
 });
+
+// ------------------------------------------------------------ exits
+test("exit: sells a position when the model turns against it, books P&L, logs it", async () => {
+  const { engine, store, client, again } = setup({ ARB_ENABLED: "false" });
+  await again0(engine);
+  const [t] = store.openTrades();
+  assert.equal(t.side, "yes");
+  // BTC collapses below the strike; someone still bids 50¢ for YES
+  (engine.feed as any).spot = async () => 79500;
+  client.all[0].yes_bid_dollars = "0.5000";
+  client.all[0].yes_ask_dollars = "0.5200";
+  (engine as any).clock = () => NOW + 60;
+  engine.series.forEach((st) => (st.nextCheck = 0));
+  await engine.tick();
+  assert.equal(store.openTrades().filter((x) => x.ticker === t.ticker).length, 0, "position closed");
+  const sold = (store as any).rows("SELECT * FROM trades WHERE result = 'sold'");
+  assert.equal(sold.length, 1);
+  const fee = Math.ceil(0.07 * t.contracts * 0.5 * 0.5 * 100 - 1e-9) / 100;
+  assert.ok(Math.abs(sold[0].pnl - (t.contracts * 0.5 - fee - t.cost)) < 0.011, `pnl ${sold[0].pnl}`);
+  assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /sold \d+ YES @ \$0\.50 to exit \(paper\): model now gives it \d+%/);
+  // sold bets don't count in the model check
+  assert.equal(store.modelCheck("paper").settled, 0);
+});
+
+test("exit: holds when the bid isn't clearly better than holding", async () => {
+  const { engine, store } = setup({ ARB_ENABLED: "false" });
+  await again0(engine);
+  (engine as any).clock = () => NOW + 60;
+  engine.series.forEach((st) => (st.nextCheck = 0));
+  await engine.tick(); // model still likes YES at these prices
+  assert.equal((store as any).rows("SELECT * FROM trades WHERE result = 'sold'").length, 0);
+  assert.equal(store.openTrades().length, 1);
+});
+
+test("exit: waits EXIT_MIN_HOLD_SECONDS after buying", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false", EXIT_MIN_HOLD_SECONDS: "120" });
+  await again0(engine);
+  (engine.feed as any).spot = async () => 79500;
+  client.all[0].yes_bid_dollars = "0.5000";
+  (engine as any).clock = () => NOW + 60;
+  engine.series.forEach((st) => (st.nextCheck = 0));
+  await engine.tick();
+  assert.equal(store.openTrades().length, 1, "too soon to sell");
+});
+
+test("exit: live sells are reduce-only and only book what filled", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  (client as any).getBalance = async () => 500;
+  (client as any).createOrder = async (_t: string, _s: string, count: number) => ({ order_id: "b1", fill_count_fp: String(count), taker_fees_dollars: "0.05" });
+  const sells: any[] = [];
+  (client as any).sellOrder = async (ticker: string, side: string, count: number, price: number) => {
+    sells.push({ ticker, side, count, price });
+    return { order_id: "s1", fill_count_fp: "1", taker_fees_dollars: "0.02", status: "executed" };
+  };
+  store.set("strategy_modes", JSON.stringify({ crypto: "live" }));
+  await again0(engine);
+  const before = store.openTrades().find((t) => t.mode === "live")!;
+  (engine.feed as any).spot = async () => 79500;
+  client.all[0].yes_bid_dollars = "0.5000";
+  client.all[0].yes_ask_dollars = "0.5200";
+  (engine as any).clock = () => NOW + 60;
+  engine.series.forEach((st) => (st.nextCheck = 0));
+  await engine.tick();
+  assert.deepEqual(sells, [{ ticker: before.ticker, side: "yes", count: before.contracts, price: 0.5 }]);
+  const still = store.openTrades().filter((t) => t.mode === "live").reduce((n, t) => n + t.contracts, 0);
+  assert.equal(still, before.contracts - 1, "only the 1 contract that sold is closed");
+});
+
+test("sell order goes to V2 as a reduce-only IOC on the right side of the book", async () => {
+  const { KalshiClient } = await import("../src/kalshi.ts");
+  const bodies: any[] = [];
+  const c = new KalshiClient("https://x.test/trade-api/v2", "", null, (async (_u: string, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ order_id: "s", fill_count: "2.00", remaining_count: "0.00" }), { status: 201 });
+  }) as any);
+  await c.sellOrder("T", "yes", 2, 0.5);
+  await c.sellOrder("T", "no", 3, 0.3);
+  assert.deepEqual([bodies[0].side, bodies[0].price, bodies[0].reduce_only, bodies[0].time_in_force], ["ask", "0.5000", true, "immediate_or_cancel"]);
+  assert.deepEqual([bodies[1].side, bodies[1].price, bodies[1].count], ["bid", "0.7000", "3.00"]);
+});
+
+async function again0(engine: any) {
+  await engine.tick();
+}

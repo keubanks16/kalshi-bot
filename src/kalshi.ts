@@ -350,6 +350,28 @@ export class KalshiClient {
   }
 
   /** Buy with a limit at `price` dollars, immediate-or-cancel: fill now at that price or not at all. */
+  /**
+   * Sell contracts we hold, immediate-or-cancel at `price` or better, reduce-only
+   * so it can never open a new position. Selling YES is an ask on YES; selling
+   * NO at x is a bid on YES at 1 - x.
+   */
+  async sellOrder(ticker: string, side: "yes" | "no", count: number, price: number, clientOrderId: string = crypto.randomUUID()): Promise<Order> {
+    const contracts = Math.floor(count);
+    const yesPrice = side === "yes" ? price : 1 - price;
+    const body = {
+      ticker,
+      side: side === "yes" ? "ask" : "bid",
+      price: (Math.round(yesPrice * 10000) / 10000).toFixed(4),
+      count: contracts.toFixed(2),
+      self_trade_prevention_type: "taker_at_cross",
+      client_order_id: clientOrderId,
+      time_in_force: "immediate_or_cancel",
+      reduce_only: true,
+    };
+    const r = await this.request<V2OrderReply>("POST", "/portfolio/events/orders", undefined, body);
+    return fromV2(r, contracts, "immediate_or_cancel");
+  }
+
   async createOrder(ticker: string, side: "yes" | "no", count: number, price: number, clientOrderId: string = crypto.randomUUID()): Promise<Order> {
     return this.placeV2(ticker, side, count, price, clientOrderId, { time_in_force: "immediate_or_cancel" });
   }

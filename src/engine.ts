@@ -81,6 +81,65 @@ export class Engine {
   lastError: string | null = null;
   heartbeat = 0;
   private bankrollCache = new Map<string, { value: number; at: number }>();
+  private exitTriedAt = new Map<string, number>();
+
+  /**
+   * Sell an open crypto position when the market now pays clearly more for it
+   * than the model thinks it's worth: best bid minus the taker fee beats the
+   * model's chance of winning by EXIT_MARGIN. Takes the bid immediately
+   * (reduce-only live), at most one try per market every 30s.
+   */
+  async maybeExit(m: Market, p: number, now: number): Promise<void> {
+    for (const pos of this.store.positions(m.ticker, "crypto")) {
+      if (pos.contracts < 1 || now - pos.firstTs < this.s.exitMinHoldSeconds) continue;
+      const key = `${pos.mode}:${m.ticker}`;
+      if (now - (this.exitTriedAt.get(key) ?? 0) < 30) continue;
+      const bid = pos.side === "yes" ? dollars(m, "yes_bid") : (dollars(m, "no_bid") ?? (dollars(m, "yes_ask") === null ? null : Math.round((1 - dollars(m, "yes_ask")!) * 100) / 100));
+      if (bid === null || !(bid > 0)) continue;
+      const pSide = pos.side === "yes" ? p : 1 - p;
+      const feePer = takerFee(100, bid, this.s.takerFeeRate) / 100;
+      const gain = bid - feePer - pSide;
+      if (gain < this.s.exitMargin) continue;
+      this.exitTriedAt.set(key, now);
+
+      const sideUp = pos.side.toUpperCase();
+      let filled: number;
+      let fee: number;
+      if (pos.mode !== "paper") {
+        const order = await this.sendOrReconcile(m.ticker, (id) => this.client.sellOrder(m.ticker, pos.side, pos.contracts, bid, id));
+        if (!order) {
+          this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: "hold", reason: `tried to sell ${pos.contracts} ${sideUp} @ $${bid.toFixed(2)} to exit, but Kalshi didn't take it: ${this.lastError ?? "no reason given"}`, p_fair: p, price: bid });
+          continue;
+        }
+        filled = Math.min(pos.contracts, orderFilled(order));
+        fee = Number(order.taker_fees_dollars ?? 0) || takerFee(filled, bid, this.s.takerFeeRate);
+        this.cashStale = true;
+      } else {
+        // Paper: sell into the bid, limited by the size showing there.
+        const raw = m[pos.side === "yes" ? "yes_bid_size_fp" : "yes_ask_size_fp"];
+        const shown = raw === undefined || raw === null || raw === "" ? null : Math.floor(Number(raw));
+        filled = shown === null ? pos.contracts : Math.min(pos.contracts, shown);
+        fee = takerFee(filled, bid, this.s.takerFeeRate);
+      }
+      if (filled < 1) {
+        this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: "hold", reason: `tried to sell ${pos.contracts} ${sideUp} @ $${bid.toFixed(2)} to exit; nothing filled`, p_fair: p, price: bid });
+        continue;
+      }
+      const pnl = this.store.closeSold(m.ticker, pos.mode, pos.side, filled, bid, fee, now);
+      this.bankrollCache.delete(pos.mode as Mode);
+      const money = (x: number) => `${x < 0 ? "-" : "+"}$${Math.abs(x).toFixed(2)}`;
+      this.store.addDecision({
+        ts: now,
+        strategy: "crypto",
+        ticker: m.ticker,
+        action: "sell",
+        reason: `sold ${filled}${filled < pos.contracts ? ` of ${pos.contracts}` : ""} ${sideUp} @ $${bid.toFixed(2)} to exit${pos.mode === "paper" ? " (paper)" : ""}: model now gives it ${(pSide * 100).toFixed(0)}%, ${money(pnl)}`,
+        p_fair: p,
+        price: bid,
+      });
+    }
+  }
+
   /** First price of each crypto market's current bid, so chasing stays within MAKER_MAX_CHASE of it. */
   private chaseBase = new Map<string, number>();
   private modeLimits: Partial<Record<"paper" | "live", Partial<Limits>>> = {};
@@ -388,7 +447,11 @@ export class Engine {
   async runCrypto(now: number, maxClose: number | null): Promise<void> {
     // A series with a resting bid is re-priced every round, so a bid whose edge
     // disappears is pulled within seconds instead of waiting for its next check.
-    const guarding = new Set(this.store.restingOrders(this.modeFor("crypto")).filter((o) => o.strategy === "crypto").map((o) => seriesOf(o.event_ticker)));
+    // ...and so is one with an open position, so an exit happens promptly.
+    const guarding = new Set([
+      ...this.store.restingOrders(this.modeFor("crypto")).filter((o) => o.strategy === "crypto").map((o) => seriesOf(o.event_ticker)),
+      ...(this.s.exitEnabled ? this.store.openTrades().filter((t) => t.strategy === "crypto").map((t) => seriesOf(t.event_ticker)) : []),
+    ]);
     const scheduled = [...this.series.entries()].filter(([name, st]) => st.nextCheck <= now && !guarding.has(name)).sort((a, b) => a[1].nextCheck - b[1].nextCheck).slice(0, this.s.seriesPerTick);
     const due = [...[...this.series.entries()].filter(([name]) => guarding.has(name)), ...scheduled];
 
@@ -430,6 +493,7 @@ export class Engine {
         }
         const p = blendWithMarket(model, yb, ya, this.s.modelWeight);
         const limits = { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge };
+        if (this.s.exitEnabled) await this.maybeExit(m, p, now);
 
         // A resting bid tends to fill just as the price turns against it, so
         // re-check it every time: if the edge at our price is gone, pull it.

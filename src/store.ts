@@ -170,6 +170,53 @@ export class Store {
   settleTrade(id: number, result: string, pnl: number, now: number): void {
     this.sql.exec("UPDATE trades SET result = ?, pnl = ?, settled_ts = ? WHERE id = ?", result, pnl, now, id);
   }
+
+  /** Open filled positions on a market, one per mode and side. */
+  positions(ticker: string, strategy?: string): { mode: string; side: "yes" | "no"; contracts: number; cost: number; firstTs: number }[] {
+    return this.rows(
+      `SELECT mode, side, SUM(contracts) AS contracts, SUM(cost) AS cost, MIN(ts) AS firstTs FROM trades
+       WHERE ticker = ? AND result IS NULL ${strategy ? "AND strategy = ?" : ""} GROUP BY mode, side`,
+      ...(strategy ? [ticker, strategy] : [ticker]),
+    ).map((r: any) => ({ mode: String(r.mode), side: r.side, contracts: Number(r.contracts), cost: Number(r.cost), firstTs: Number(r.firstTs) }));
+  }
+
+  /**
+   * Book selling `contracts` of an open position at `price` (fee in dollars, for
+   * the whole sale), oldest trades first, splitting a trade if only part of it
+   * is sold. Each closed part gets result "sold" and its share of the P&L.
+   * Returns the total P&L booked.
+   */
+  closeSold(ticker: string, mode: string, side: string, contracts: number, price: number, fee: number, now: number): number {
+    const open = this.rows<TradeRow>("SELECT * FROM trades WHERE ticker = ? AND mode = ? AND side = ? AND result IS NULL ORDER BY ts, id", ticker, mode, side);
+    let left = contracts;
+    let total = 0;
+    const r4 = (x: number) => Math.round(x * 10000) / 10000;
+    for (const t of open) {
+      if (left <= 0) break;
+      const k = Math.min(left, t.contracts);
+      const proceeds = k * price - (fee * k) / contracts;
+      if (k === t.contracts) {
+        const pnl = r4(proceeds - t.cost);
+        this.settleTrade(t.id, "sold", pnl, now);
+        total += pnl;
+      } else {
+        // Split: the sold part becomes its own closed row; the rest stays open.
+        const share = k / t.contracts;
+        const cost = r4(t.cost * share);
+        const tradeFee = r4(t.fee * share);
+        this.sql.exec("UPDATE trades SET contracts = ?, cost = ?, fee = ? WHERE id = ?", t.contracts - k, r4(t.cost - cost), r4(t.fee - tradeFee), t.id);
+        const { id: _id, result: _r, pnl: _p, ...rest } = t as any;
+        delete rest.settled_ts;
+        this.addTrade({ ...rest, contracts: k, cost, fee: tradeFee });
+        const newId = Number(this.one<{ id: number }>("SELECT MAX(id) AS id FROM trades").id);
+        const pnl = r4(proceeds - cost);
+        this.settleTrade(newId, "sold", pnl, now);
+        total += pnl;
+      }
+      left -= k;
+    }
+    return r4(total);
+  }
   // Everything below is per trading mode, so paper results never mix with
   // real ones and paper positions never use up live risk limits.
   /** Sides held or resting on a market (a resting order counts, so we never stack or oppose it). */
@@ -281,7 +328,7 @@ export class Store {
       `SELECT COUNT(*) AS n, COALESCE(SUM(p_fair), 0) AS exp,
               COALESCE(SUM(CASE WHEN result = side THEN 1 ELSE 0 END), 0) AS won,
               COALESCE(AVG(price), 0) AS px
-       FROM trades WHERE mode = ? AND strategy = ? AND ts >= ? AND result IS NOT NULL AND p_fair IS NOT NULL`,
+       FROM trades WHERE mode = ? AND strategy = ? AND ts >= ? AND result IN ('yes', 'no') AND p_fair IS NOT NULL`,
       mode,
       strategy,
       since,

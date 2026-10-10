@@ -39,6 +39,8 @@
     "MAKER_STRATEGIES": "crypto,sports,ai", // rest post-only bids instead of paying the taker fee; "none" = always take the ask
     "MAKER_TTL_SECONDS": "120",     // crypto: cancel an unfilled bid after 2 minutes
     "MAKER_MAX_CHASE": "0.03",      // crypto: a resting bid may follow the price up by at most 3¢ in total
+    "EXIT_ENABLED": "true",         // crypto: sell a position when the model turns against it
+    "EXIT_MARGIN": "0.03",          // ...if the bid beats the model's value by 3¢+ per contract after fees
     "MAKER_SLOW_TTL_SECONDS": "1800", // sports and AI: 30 minutes (sports bids always cancel before the game)
     "MIN_SECONDS_LEFT": "120",
 

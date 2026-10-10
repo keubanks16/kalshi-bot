@@ -45,7 +45,7 @@ export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwor
   <td>${esc(t.side.toUpperCase())} ×${t.contracts} <span class="sub">@ $${t.price.toFixed(2)}</span><br><b>Bet $${t.cost.toFixed(2)}</b>${
     t.pnl === null ? `<br><span class="sub">pays $${t.contracts.toFixed(2)} if right</span>` : ""
   }</td>
-  <td class="${cls(t.pnl)}">${t.pnl === null ? `open<br><span class="sub">closes ${t.close_ts ? esc(closes(t.close_ts)) : ""}</span>` : esc(money(t.pnl))}</td>
+  <td class="${cls(t.pnl)}">${t.pnl === null ? `open<br><span class="sub">closes ${t.close_ts ? esc(closes(t.close_ts)) : ""}</span>` : `${esc(money(t.pnl))}${t.result === "sold" ? `<br><span class="sub">sold early</span>` : ""}`}</td>
 </tr>`,
         )
         .join("")
