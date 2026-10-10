@@ -1254,3 +1254,66 @@ test("take: a live order that gets nothing says why", async () => {
   await engine.tick();
   assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /not bought: nothing offered at \$0\.5\d or better when the order arrived \(Kalshi: canceled\)/);
 });
+
+// ------------------------------------------------------------ 15-minute switch
+function add15m(client: any, floor = 80580) {
+  client.all.push({
+    ...client.all[0],
+    ticker: "KXBTC15M-26OCT091015-15",
+    event_ticker: "KXBTC15M-26OCT091015",
+    open_time: iso(NOW - 300),
+    close_time: iso(NOW + 600),
+    floor_strike: floor, // default: close to the money, so it isn't a near-certain market
+  });
+}
+
+test("15-minute switch: off stops new 15M bets but keeps hourly ones and the learning data", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  add15m(client);
+  store.set("crypto_15m", "off");
+  for (let i = 0; i < 3; i++) {
+    engine.series.forEach((st) => (st.nextCheck = 0));
+    await engine.tick();
+  }
+  const tickers = store.openTrades().map((t) => t.ticker);
+  assert.ok(!tickers.includes("KXBTC15M-26OCT091015-15"), "no 15-minute bet");
+  assert.ok(tickers.includes("KXBTCD-26OCT0911-T80000"), "hourly still trades");
+  assert.ok((store as any).rows("SELECT COUNT(*) AS n FROM snapshots WHERE series = 'KXBTC15M'")[0].n >= 1, "15M still recorded for learning");
+});
+
+test("15-minute switch: on (default) trades them", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  add15m(client, 80000); // clear edge vs the 55¢ ask
+  for (let i = 0; i < 3; i++) {
+    engine.series.forEach((st) => (st.nextCheck = 0));
+    await engine.tick();
+  }
+  assert.ok(store.openTrades().some((t) => t.ticker === "KXBTC15M-26OCT091015-15"));
+});
+
+test("15-minute switch: turning it off pulls a resting 15M bid", async () => {
+  const { engine, store, client, again } = makerSetup();
+  client.all = [{ ...client.all[0], ticker: "KXBTC15M-26OCT091015-15", event_ticker: "KXBTC15M-26OCT091015", open_time: iso(NOW - 300), close_time: iso(NOW + 600) }];
+  await again();
+  assert.equal(store.restingOrders().length, 1);
+  store.set("crypto_15m", "off");
+  await again(10);
+  assert.equal(store.restingOrders().length, 0);
+  assert.match(store.recentDecisions(5).map((d: any) => d.reason).join(" | "), /15-minute markets turned off/);
+  void engine;
+});
+
+test("dashboard shows the 15-minute toggle under Crypto", () => {
+  const html = renderDashboard(
+    {
+      mode: "paper", problem: null, status: "ok", lastError: null, alive: true, killSwitch: false, horizon: "day",
+      horizons: [{ key: "day", label: "x" }] as any, limits: [], crypto15m: false,
+      switches: [{ key: "cryptoEnabled", strategy: "crypto", label: "Crypto", on: true, mode: "paper" }],
+      summary: { trades: 0, settled: 0, wins: 0, pnl: 0, fees: 0, openCost: 0 }, today: 0,
+      byStrategy: [], trades: [], decisions: [], timezone: "America/New_York", diag: {},
+    } as any,
+    { authed: true, passwordSet: true },
+  );
+  assert.ok(html.includes('action="/crypto15m"') && html.includes("15-minute markets"));
+  assert.match(html, /name="on" value="on"><button class="pill-off">Off/);
+});

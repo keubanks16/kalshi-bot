@@ -17,6 +17,7 @@ export interface Snapshot {
   views?: string[];
   canGoLive?: boolean;
   keysSet?: boolean;
+  crypto15m?: boolean;
   learning?: { total: number; labelled: number; days: number; first: number | null; enabled: boolean };
   /** Available cash in Kalshi as the bot last read it (only while something trades live). */
   kalshiCash?: { value: number | null; at: number | null; error: string | null; byIndex?: Record<number, number> | null; lastMove?: { text: string; at: number; ok: boolean } | null } | null;
@@ -246,6 +247,7 @@ export class Bot extends DurableObject<Env> {
       limits: this.limitRows(),
       limitsByMode: { paper: this.limitRows("paper"), live: this.limitRows("live") },
       learning: { ...this.store.snapshotStats(), enabled: this.settings.snapshotsEnabled },
+      crypto15m: this.store.get("crypto_15m") === "off" ? false : this.store.get("crypto_15m") === "on" ? true : this.settings.crypto15m,
       modelWeight: { value: this.modelWeight(), dflt: this.settings.modelWeight, options: MODEL_WEIGHT_OPTIONS },
       summary: this.store.summary(view, since),
       testSince,
@@ -447,6 +449,12 @@ export class Bot extends DurableObject<Env> {
       sw = cleanSwitches(JSON.parse(this.store.get("strategies") ?? "{}"));
     } catch {}
     return { ...this.settings, ...sw };
+  }
+
+  /** Turn trading the 15-minute crypto markets on or off (dashboard). */
+  async setCrypto15m(on: boolean): Promise<void> {
+    this.store.set("crypto_15m", on ? "on" : "off");
+    this.engine?.applyOverrides();
   }
 
   async setStrategy(key: string, on: boolean): Promise<void> {

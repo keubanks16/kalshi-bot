@@ -192,7 +192,16 @@ ${
             : live
               ? `<form method="post" action="/mode"><input type="hidden" name="mode" value="paper"><input type="hidden" name="strategy" value="${esc(x.strategy)}"><button class="link">Switch ${esc(x.label)} to paper</button></form>`
               : goLiveForm(x.strategy, x.label);
-          return `<div class="strow"><div class="row2 sw"><span>${esc(x.label)} ${x.mode ? badge : ""}</span>${toggle}</div>${modeCtl}</div>`;
+          const c15 = s.crypto15m !== false;
+          const sub15 =
+            x.key === "cryptoEnabled" && s.crypto15m !== undefined
+              ? `<div class="row2 sw" style="margin-top:6px"><span class="sub">15-minute markets</span>${
+                  opts.authed
+                    ? `<form method="post" action="/crypto15m"><input type="hidden" name="on" value="${c15 ? "off" : "on"}"><button class="${c15 ? "pill-on" : "pill-off"}">${c15 ? "On" : "Off"}</button></form>`
+                    : `<b class="${c15 ? "up" : "sub"}">${c15 ? "On" : "Off"}</b>`
+                }</div>`
+              : "";
+          return `<div class="strow"><div class="row2 sw"><span>${esc(x.label)} ${x.mode ? badge : ""}</span>${toggle}</div>${sub15}${modeCtl}</div>`;
         })
         .join("")}<div class="sub" style="margin-top:6px">On/Off starts or stops a strategy. PAPER/LIVE picks simulated or real money for it. Open bets stay open and settle normally.</div>${
         opts.authed && anyLive

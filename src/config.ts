@@ -47,7 +47,8 @@ export interface Settings {
   cryptoAssets: string[]; // e.g. BTC, ETH, SOL
   seriesPerTick: number; // how many crypto series to re-check each tick
   liveStreams: boolean;
-  cfIndexFeed: boolean; // use Kalshi's CF Benchmarks 5Hz index stream as the coin price (needs API keys) // live websocket prices (best on the Workers Paid plan)
+  cfIndexFeed: boolean;
+  crypto15m: boolean; // trade the 15-minute crypto markets (KX…15M); dashboard-switchable // use Kalshi's CF Benchmarks 5Hz index stream as the coin price (needs API keys) // live websocket prices (best on the Workers Paid plan)
 
   // strategy
   minEdge: number; // expected profit per $1 contract after fees, directional trades
@@ -144,6 +145,7 @@ export function loadSettings(env: Env): Settings {
     seriesPerTick: num(env, "SERIES_PER_TICK", 3),
     liveStreams: bool(env, "LIVE_STREAMS", false),
     cfIndexFeed: bool(env, "CF_INDEX_FEED", true),
+    crypto15m: bool(env, "CRYPTO_15M_ENABLED", true),
 
     minEdge: num(env, "MIN_EDGE", 0.04),
     minArbProfit: num(env, "MIN_ARB_PROFIT", 0.02),

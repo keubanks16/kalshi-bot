@@ -121,6 +121,13 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
     return new Response(null, { status: 303, headers: { Location: `/?tab=picks&msg=${encodeURIComponent(msg)}` } });
   }
 
+  if (req.method === "POST" && url.pathname === "/crypto15m") {
+    if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+    const form = await req.formData();
+    await stub.setCrypto15m(form.get("on") === "on");
+    return home();
+  }
+
   if (req.method === "POST" && url.pathname === "/strategy") {
     if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
     const form = await req.formData();

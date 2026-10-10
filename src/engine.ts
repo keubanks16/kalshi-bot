@@ -264,7 +264,9 @@ export class Engine {
     try {
       switches = cleanSwitches(JSON.parse(this.store.get("strategies") ?? "{}"));
     } catch {}
-    this.s = { ...this.base, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride, ...(range ?? {}), ...switches };
+    const c15 = this.store.get("crypto_15m");
+    const crypto15m = c15 === "on" ? { crypto15m: true } : c15 === "off" ? { crypto15m: false } : {};
+    this.s = { ...this.base, ...crypto15m, ...cleanLimits(saved), ...(w > 0 && w <= 1 ? { modelWeight: w } : {}), ...modeOverride, ...(range ?? {}), ...switches };
     if (prevMode && prevMode !== this.s.mode) this.bankrollCache.clear();
     // Paper and live each have their own spending limits on top of the shared ones.
     this.modeLimits = {};
@@ -562,6 +564,14 @@ export class Engine {
         const p = blendWithMarket(model, yb, ya, this.s.modelWeight);
         const limits = { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge, yesMinEdge: this.s.cryptoYesMinEdge };
         if (this.s.exitEnabled) await this.maybeExit(m, p, now);
+        if (!this.s.crypto15m && /15M$/.test(series)) {
+          // 15-minute markets switched off: no new bets, pull any resting bid
+          // (open positions still get exits, and learning data is still recorded).
+          const r = this.store.restingOrders(this.modeFor("crypto")).find((o) => o.ticker === m.ticker);
+          if (r) await this.cancelResting(r, now, "15-minute markets turned off");
+          if (!best) best = { ticker: m.ticker, action: "hold", reason: "15-minute markets are off", p, price: null, edge: -Infinity };
+          continue;
+        }
 
         // A resting bid tends to fill just as the price turns against it, so
         // re-check it every time: if the edge at our price is gone, pull it.
