@@ -118,7 +118,7 @@ class FakeFeed {
 }
 
 function setup(vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAKER_STRATEGIES: "none", MAX_ORDERS_PER_MARKET: "1", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", CRYPTO_YES_MIN_EDGE: "0", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAKER_STRATEGIES: "none", MAX_ORDERS_PER_MARKET: "1", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ...vars });
   const store = new Store(memorySql());
   const client = new FakeClient();
   const engine = new Engine(s, client as any, new FakeFeed() as any, store, () => NOW);
@@ -393,7 +393,7 @@ test("dashboard renders and escapes Kalshi text", async () => {
 
 // ------------------------------------------------------------ maker orders
 function makerSetup(vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", MAX_ORDERS_PER_MARKET: "1", HYBRID_TAKE: "false", CRYPTO_YES_MIN_EDGE: "0", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", MAX_ORDERS_PER_MARKET: "1", HYBRID_TAKE: "false", ...vars });
   const store = new Store(memorySql());
   const client = new FakeClient();
   const clock = { now: NOW };

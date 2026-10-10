@@ -31,7 +31,8 @@
     "LIVE_STREAMS": "true",         // live websocket prices from Coinbase + Kraken (Workers Paid)
 
     "MIN_EDGE": "0.04",
-    "CRYPTO_YES_MIN_EDGE": "0.08",  // crypto YES bets need 8¢+ of edge (they were losing more than the model expected)
+    "CRYPTO_YES_MIN_EDGE": "0",     // off: extra edge for crypto YES bets (0 = same bar as NO)
+    "MIN_VOL": "0.10",              // annualized vol floor; 0.20 was pinning the model above real overnight vol (BTC ~0.12)
     "MIN_PRICE": "0.15",            // only bet between 15¢ and 85¢ (editable on the dashboard)
     "MAX_PRICE": "0.85",
     "MIN_ARB_PROFIT": "0.02",
