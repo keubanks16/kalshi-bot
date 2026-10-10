@@ -61,7 +61,7 @@
     "PRIZEPICKS_SPORTS": "americanfootball_ncaaf",   // also: americanfootball_nfl, basketball_nba, baseball_mlb, icehockey_nhl…
     "PRIZEPICKS_MARKETS": "player_pass_yds,player_rush_yds,player_reception_yds",
     "PRIZEPICKS_REGIONS": "us,us_dfs",  // us = sportsbooks, us_dfs = PrizePicks
-    "PRIZEPICKS_DAILY_CREDITS": "300",  // safety ceiling; each game costs markets × regions credits (6 with the defaults)
+    "PRIZEPICKS_DAILY_CREDITS": "300",  // safety ceiling; each game: a cheap PrizePicks check, then sportsbook odds only if PrizePicks has players posted
     "PRIZEPICKS_INTERVAL_MINUTES": "0",  // 0 = only when you tap "Check now" (saves credits); e.g. 120 = every 2 hours
     "PRIZEPICKS_HOURS_AHEAD": "24",
     "PRIZEPICKS_MIN_BOOKS": "1",

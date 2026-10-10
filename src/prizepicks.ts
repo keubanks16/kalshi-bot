@@ -1,7 +1,8 @@
 // PrizePicks pick finder. It never places entries and never touches
 // PrizePicks' own site: The Odds API licenses PrizePicks' lines (bookmaker
-// "prizepicks", region "us_dfs"), so one request per game returns both the
-// PrizePicks lines and the sportsbooks' player-prop odds for the same game.
+// "prizepicks", region "us_dfs"). Per game it first asks for PrizePicks'
+// lines only; games with no PrizePicks players stop there. Otherwise it buys
+// the sportsbooks' odds for just the stats PrizePicks posted.
 //
 // Fair probabilities: each sportsbook's over/under prices are de-vigged
 // (scaled to sum to 100%), then the median across books is used. When no
@@ -463,6 +464,15 @@ export class PicksScanner {
     }
   }
 
+  /** Count the credits a request used (the API reports it) toward today's budget. */
+  private charge(res: Response, fallback: number, creditKey: string, add: (n: number) => number): void {
+    const last = res.headers.get("x-requests-last");
+    const n = last !== null ? Number(last) : fallback;
+    this.store.set(creditKey, String(add(n)));
+    const rem = res.headers.get("x-requests-remaining");
+    if (rem !== null) this.oddsRemaining = Number(rem);
+  }
+
   /** Clear the screenshot results card. */
   clearShot(): void {
     this.store.set("pp_shot_view", "null");
@@ -602,7 +612,9 @@ export class PicksScanner {
     const creditKey = `pp_credits_${dayOf(now, this.s.timezone)}`;
     let used = Number(this.store.get(creditKey) ?? 0);
     const regions = this.s.regions.split(",").map((r) => r.trim()).filter(Boolean);
-    const cost = this.s.markets.length * regions.length;
+    const bookRegions = regions.filter((r) => r !== "us_dfs").length ? regions.filter((r) => r !== "us_dfs") : ["us"];
+    const ppCost = this.s.markets.length; // worst case for the PrizePicks-only request
+    let skippedNoPlayers = 0;
     const key = encodeURIComponent(this.oddsKey);
     let cache: Record<string, CacheEntry> = {};
     try {
@@ -639,23 +651,40 @@ export class PicksScanner {
         let entry: CacheEntry | undefined = cache[ev.id];
         const fresh = entry && now - entry.ts < this.reuseSeconds() && this.s.markets.every((m) => entry!.markets.includes(m));
         if (!fresh) {
-          if (used + cost > this.s.dailyCredits) {
+          // a) PrizePicks only: which players and stats it has posted for this game.
+          //    Games with no PrizePicks players cost next to nothing and are skipped.
+          // b) Sportsbooks only, just for the stats PrizePicks posted.
+          if (used + ppCost > this.s.dailyCredits) {
             budgetHit = true;
           } else {
             try {
-              const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/events/${ev.id}/odds?apiKey=${key}&regions=${regions.join(",")}&markets=${this.s.markets.join(",")}&oddsFormat=decimal`;
-              const { body, res } = await this.json(url);
-              used += Number(res.headers.get("x-requests-last") ?? cost);
-              this.store.set(creditKey, String(used));
-              const rem = res.headers.get("x-requests-remaining");
-              if (rem !== null) this.oddsRemaining = Number(rem);
-              entry = { ts: now, markets: this.s.markets, lines: extractPPLines(body), quotes: extractQuotes(body) };
-              cache[ev.id] = entry;
+              const base = `https://api.the-odds-api.com/v4/sports/${sportKey}/events/${ev.id}/odds?apiKey=${key}&oddsFormat=decimal`;
+              const pp = await this.json(`${base}&bookmakers=prizepicks&markets=${this.s.markets.join(",")}`);
+              this.charge(pp.res, ppCost, creditKey, (n) => (used += n));
+              const lines = extractPPLines(pp.body);
+              const posted = this.s.markets.filter((m) => lines.some((l) => l.market === m));
+              let quotes: Quote[] = [];
+              let booksSkipped = false;
+              if (!posted.length) {
+                skippedNoPlayers++;
+              } else if (used + posted.length * bookRegions.length > this.s.dailyCredits) {
+                budgetHit = true;
+                booksSkipped = true;
+              } else {
+                const books = await this.json(`${base}&regions=${bookRegions.join(",")}&markets=${posted.join(",")}`);
+                this.charge(books.res, posted.length * bookRegions.length, creditKey, (n) => (used += n));
+                quotes = extractQuotes(books.body);
+              }
+              if (!booksSkipped) {
+                entry = { ts: now, markets: this.s.markets, lines: posted.length ? lines : [], quotes };
+                cache[ev.id] = entry;
+              }
             } catch (e) {
               problems.push(`${label} props: ${(e as Error).message}`);
             }
           }
         }
+        if (entry && !entry.lines.length) continue; // no PrizePicks players in this game
         if (!entry) continue;
         games++;
         linesSeen += entry.lines.length;
@@ -695,13 +724,15 @@ export class PicksScanner {
     const status =
       problems.length && !games
         ? problemText
+        : !games && skippedNoPlayers && !budgetHit
+          ? `None of the ${skippedNoPlayers} ${sports} game${skippedNoPlayers > 1 ? "s" : ""} in the next ${this.s.hoursAhead} hours have PrizePicks players posted yet.`
         : !games
           ? budgetHit
             ? `Daily odds budget used (${used} of ${this.s.dailyCredits} credits). Resumes tomorrow.`
             : `No ${sports} games in the next ${this.s.hoursAhead} hours.`
           : !linesSeen
             ? `Checked ${games} ${sports} game${games > 1 ? "s" : ""}, but PrizePicks has no lines posted for them yet${budget}.`
-            : `Priced ${priced} of ${linesSeen} PrizePicks lines in ${games} ${sports} game${games > 1 ? "s" : ""}${budget}.${this.s.intervalMinutes > 0 ? ` Next check in ${this.s.intervalMinutes} min.` : ""}${problems.length ? ` (${problemText})` : ""}`;
+            : `Priced ${priced} of ${linesSeen} PrizePicks lines in ${games} ${sports} game${games > 1 ? "s" : ""}${skippedNoPlayers ? `; skipped ${skippedNoPlayers} game${skippedNoPlayers > 1 ? "s" : ""} with no PrizePicks players` : ""}${budget}.${this.s.intervalMinutes > 0 ? ` Next check in ${this.s.intervalMinutes} min.` : ""}${problems.length ? ` (${problemText})` : ""}`;
     const v: PicksView = { ts: now, status, picks: picks.slice(0, 40), slips, linesSeen, priced };
     this.store.set("picks_view", JSON.stringify(v));
     return v;

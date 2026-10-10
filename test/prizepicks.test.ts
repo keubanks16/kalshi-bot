@@ -110,12 +110,12 @@ function fakeFetch(calls: string[]) {
     calls.push(url);
     const json = (b: unknown, h: Record<string, string> = {}) => new Response(JSON.stringify(b), { headers: { "content-type": "application/json", ...h } });
     if (url.includes("/events?apiKey=k")) return json(events);
-    if (url.includes("/events/e1/odds")) return json(oddsJson(), { "x-requests-last": "6", "x-requests-remaining": "480" });
+    if (url.includes("/events/e1/odds")) return json(oddsJson(), { "x-requests-last": "3", "x-requests-remaining": "480" });
     return new Response("nope", { status: 404 });
   };
 }
 
-test("scanner: one Odds API call per game gets PrizePicks and the books, then reuses the cache", async () => {
+test("scanner: PrizePicks first, then the books for just the posted stats, then reuses the cache", async () => {
   const store = kv();
   const calls: string[] = [];
   const sc = new PicksScanner(settings(), store, "k", fakeFetch(calls) as any);
@@ -123,8 +123,10 @@ test("scanner: one Odds API call per game gets PrizePicks and the books, then re
   const v = await sc.run(NOW);
   assert.ok(calls.every((u) => u.startsWith("https://api.the-odds-api.com/"))); // never PrizePicks' own site
   const odds = calls.filter((u) => u.includes("/odds"));
-  assert.equal(odds.length, 1); // the far-off game isn't fetched
-  assert.match(odds[0], /regions=us,us_dfs&markets=player_pass_yds,player_rush_yds,player_reception_yds/);
+  assert.equal(odds.length, 2); // the far-off game isn't fetched
+  assert.match(odds[0], /bookmakers=prizepicks&markets=player_pass_yds,player_rush_yds,player_reception_yds/);
+  assert.match(odds[1], /regions=us&markets=/);
+  assert.doesNotMatch(odds[1], /us_dfs/);
   assert.equal(v.linesSeen, 3);
   assert.equal(v.priced, 2); // no sportsbook priced Coleman's receiving yards
   assert.equal(v.picks[0].player, "Gunner Stockton");
@@ -145,8 +147,8 @@ test("scanner: respects the daily credit cap and the dashboard switch", async ()
   const store = kv();
   const calls: string[] = [];
   const sc = new PicksScanner(settings({ dailyCredits: 5 }), store, "k", fakeFetch(calls) as any);
-  const v = await sc.run(NOW); // 3 markets × 2 regions = 6 > 5
-  assert.equal(calls.filter((u) => u.includes("/odds")).length, 0);
+  const v = await sc.run(NOW); // PrizePicks check 3, then books 3 more would pass 5
+  assert.equal(calls.filter((u) => u.includes("/odds")).length, 1);
   assert.match(v.status, /Daily odds budget used/);
   store.set("picks_enabled", "off");
   assert.equal(sc.due(NOW + 86400), false);
@@ -164,10 +166,10 @@ test("scanner: with interval 0 it only runs when Check now is tapped, and a quic
   assert.equal(sc.due(NOW + 86400), false); // request is used up
   sc.request();
   await sc.run(NOW + 300); // 5 minutes later: reuse
-  assert.equal(calls.filter((u) => u.includes("/odds")).length, 1);
+  assert.equal(calls.filter((u) => u.includes("/odds")).length, 2);
   sc.request();
   await sc.run(NOW + 900); // 15 minutes later: fresh odds
-  assert.equal(calls.filter((u) => u.includes("/odds")).length, 2);
+  assert.equal(calls.filter((u) => u.includes("/odds")).length, 4);
   assert.equal(sc.creditsToday(NOW), 12);
 });
 
@@ -207,4 +209,21 @@ test("scanner: clearShot empties the screenshot card", () => {
   store.set("pp_shot_view", JSON.stringify({ ts: 1, status: "x", results: [] }));
   sc.clearShot();
   assert.equal(sc.shotView(), null);
+});
+
+test("scanner: games with no PrizePicks players are skipped without buying sportsbook odds", async () => {
+  const calls: string[] = [];
+  const sc = new PicksScanner(settings(), kv(), "k", (async (url: string) => {
+    calls.push(url);
+    const json = (b: unknown) => new Response(JSON.stringify(b), { headers: { "content-type": "application/json", "x-requests-last": "0" } });
+    if (url.includes("/events?apiKey=k")) return json(events);
+    if (url.includes("bookmakers=prizepicks")) return json({ bookmakers: [] });
+    return json(oddsJson());
+  }) as any);
+  sc.spacingMs = 1;
+  const v = await sc.run(NOW);
+  const odds = calls.filter((u) => u.includes("/odds"));
+  assert.equal(odds.length, 1);
+  assert.ok(odds.every((u) => u.includes("bookmakers=prizepicks")));
+  assert.match(v.status, /None of the 1 College football game .*PrizePicks players/);
 });
