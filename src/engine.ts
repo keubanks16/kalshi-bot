@@ -1123,8 +1123,9 @@ export class Engine {
         // (never past the bot's cutoff before the market closes), so the bot
         // normally cancels it itself and logs why.
         const kalshiExpiry = Math.min(expiresAt + 30, Math.floor(close - this.s.minSecondsLeft / 2), o.expiresAt ?? Infinity);
+        this.skipWhy = "";
         const sent = await this.sendOrReconcile(m.ticker, (id) => this.client.createMakerOrder(m.ticker, o.side, contracts, o.price, Math.max(expiresAt, kalshiExpiry), id));
-        if (!sent) return (this.skipWhy = this.lastError ?? "Kalshi didn't accept the order"), none;
+        if (!sent) return (this.skipWhy = this.skipWhy || (this.lastError ?? "Kalshi didn't accept the order")), none;
         placed = sent;
       } catch (e) {
         if (e instanceof KalshiError && e.status === 429) throw e;
@@ -1347,6 +1348,13 @@ export class Engine {
     } catch (e) {
       if (e instanceof KalshiError) {
         if (e.status === 429) throw e;
+        // A post-only bid that would now cross the ask: the price moved between
+        // reading the book and sending the order. Nothing was placed and no money
+        // moved, so it's a normal skip (re-priced next round), not an error.
+        if (/post[ _]only[ _]cross/i.test(e.body ?? e.message)) {
+          this.skipWhy = "price moved before the bid landed (it would have crossed the ask); re-checking next round";
+          return null;
+        }
         this.lastError = `Order on ${ticker} rejected: ${e.message}`;
         return null;
       }

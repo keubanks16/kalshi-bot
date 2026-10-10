@@ -775,11 +775,23 @@ test("a skipped bet says exactly why: which limit, or what Kalshi said", async (
   // Kalshi rejects the order
   const b = liveMaker();
   (b.client as any).createMakerOrder = async () => {
-    throw new KalshiError(400, '{"error":{"code":"post_only_cross"}}');
+    throw new KalshiError(400, '{"error":{"code":"insufficient_balance"}}');
   };
   await b.again();
   const why2 = b.store.recentDecisions(5).map((d: any) => d.reason).join(" | ");
-  assert.match(why2, /not posted: Order on .* rejected: .*post_only_cross/);
+  assert.match(why2, /not posted: Order on .* rejected: .*insufficient_balance/);
+
+  // A post-only bid that would cross the ask (the price moved) is a quiet skip, not an error
+  for (const body of ['{"error":{"code":"post_only_cross"}}', '{"error":{"code":"invalid_order","message":"invalid order","details":"post only cross"}}']) {
+    const c = liveMaker();
+    (c.client as any).createMakerOrder = async () => {
+      throw new KalshiError(400, body);
+    };
+    await c.again();
+    const why3 = c.store.recentDecisions(5).map((d: any) => d.reason).join(" | ");
+    assert.match(why3, /not posted: price moved before the bid landed/);
+    assert.equal(c.engine.lastError, null, "no error banner for a crossed post-only bid");
+  }
 });
 
 test("live bets fit the cash Kalshi has available, and skip with a clear reason when even 1 contract doesn't", async () => {
