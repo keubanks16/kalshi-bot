@@ -83,6 +83,6 @@
     "MAX_COST_PER_EVENT": "20",
     "MAX_OPEN_RISK": "50",
     "MAX_DAILY_LOSS": "25",
-    "MAX_ORDERS_PER_MARKET": "1"         // 1 = never add to a position
+    "MAX_ORDERS_PER_MARKET": "3"         // bets per market (adds to a position, never the opposite side); 1 = never add
   }
 }

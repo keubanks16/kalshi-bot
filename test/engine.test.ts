@@ -118,7 +118,7 @@ class FakeFeed {
 }
 
 function setup(vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAKER_STRATEGIES: "none", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAKER_STRATEGIES: "none", MAX_ORDERS_PER_MARKET: "1", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ...vars });
   const store = new Store(memorySql());
   const client = new FakeClient();
   const engine = new Engine(s, client as any, new FakeFeed() as any, store, () => NOW);
@@ -393,7 +393,7 @@ test("dashboard renders and escapes Kalshi text", async () => {
 
 // ------------------------------------------------------------ maker orders
 function makerSetup(vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", MAX_ORDERS_PER_MARKET: "1", ...vars });
   const store = new Store(memorySql());
   const client = new FakeClient();
   const clock = { now: NOW };
@@ -1135,4 +1135,35 @@ test("learning: respects the daily cap and can be turned off", async () => {
   const b = makerSetup({ MAKER_STRATEGIES: "none", SNAPSHOTS_ENABLED: "false" });
   await b.again();
   assert.equal(b.store.snapshotStats().total, 0);
+});
+
+// ------------------------------------------------------------ up to 3 bets per market
+test("3 per market: adds to a position up to 3 bets, then stops", async () => {
+  const { engine, store } = setup({ ARB_ENABLED: "false", MAX_ORDERS_PER_MARKET: "3", MAX_COST_PER_ORDER: "2", MAX_COST_PER_MARKET: "50", EXIT_ENABLED: "false" });
+  for (let i = 0; i < 6; i++) {
+    engine.series.forEach((st) => (st.nextCheck = 0));
+    await engine.tick();
+  }
+  const btc = store.openTrades().filter((t) => t.ticker === "KXBTCD-26OCT0911-T80000");
+  assert.equal(btc.length, 3, "three bets, no more");
+  assert.ok(btc.every((t) => t.side === "yes"), "never the opposite side");
+  assert.equal(store.marketExposure("KXBTCD-26OCT0911-T80000", "paper").orders, 3);
+  assert.match(store.recentDecisions(20).map((d: any) => d.reason).join(" | "), /already bet this market \(3 per market\)/);
+});
+
+test("3 per market: the per-market dollar cap still applies", async () => {
+  const { engine, store } = setup({ ARB_ENABLED: "false", MAX_ORDERS_PER_MARKET: "3", MAX_COST_PER_ORDER: "4", MAX_COST_PER_MARKET: "5", EXIT_ENABLED: "false" });
+  for (let i = 0; i < 6; i++) {
+    engine.series.forEach((st) => (st.nextCheck = 0));
+    await engine.tick();
+  }
+  assert.ok(store.marketExposure("KXBTCD-26OCT0911-T80000", "paper").cost <= 5 + 1e-9);
+});
+
+test("3 per market: maker bids never stack — one resting bid at a time", async () => {
+  const { store, again } = makerSetup({ MAX_ORDERS_PER_MARKET: "3" });
+  await again();
+  await again(10);
+  await again(10);
+  assert.equal(store.restingOrders().length, 1);
 });
