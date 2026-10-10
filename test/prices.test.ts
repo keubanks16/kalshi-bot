@@ -194,3 +194,40 @@ test("volatility falls back to candles until the CF history is long enough", asy
   await feed.volatility("BTC", 900);
   assert.equal(feed.volSource.BTC, "candles");
 });
+
+test("CF history survives a restart: snapshot, restore, and volatility is available right away", async () => {
+  const now = Date.now();
+  const a = new PriceFeed((async () => new Response("[]")) as any, async () => new FakeSocket() as any);
+  let v = 100;
+  for (let i = 0; i <= 60 * 6; i++) {
+    if (i % 6 === 0 && i) v *= i % 12 === 0 ? 1.001 : 1 / 1.001;
+    a.recordCf("ETH", v, now - 60 * 60_000 + i * 10_000);
+  }
+  const saved = JSON.parse(JSON.stringify(a.cfHistorySnapshot()));
+  assert.ok(saved.ETH.length >= 55 && saved.ETH.length <= 62, `about one per minute: ${saved.ETH.length}`);
+
+  // "restart": a fresh feed with only a couple of live ticks
+  const b = new PriceFeed((async () => {
+    throw new Error("should use CF history, not candles");
+  }) as any, async () => new FakeSocket() as any);
+  b.recordCf("ETH", v, now - 5_000);
+  b.restoreCfHistory(saved, now);
+  const vol = await b.volatility("ETH", 900);
+  assert.equal(b.volSource.ETH, "cf");
+  assert.ok(Math.abs(vol - 0.725) < 0.06, `vol ${vol}`);
+});
+
+test("CF volatility ignores history before a gap (bot was down), so a jump across the gap can't inflate it", () => {
+  const now = Date.now();
+  const f = new PriceFeed((async () => new Response("[]")) as any, async () => new FakeSocket() as any);
+  // old stretch at 100, then a 30-minute gap, then 50 calm minutes at 120
+  for (let i = 0; i < 60; i++) f.recordCf("BTC", 100, now - 140 * 60_000 + i * 60_000);
+  for (let i = 0; i <= 50 * 6; i++) f.recordCf("BTC", 120 * (1 + (i % 2 ? 1e-5 : 0)), now - 50 * 60_000 + i * 10_000);
+  const vol = f.cfVolatility("BTC", now)!;
+  assert.ok(vol !== null && vol < 0.05, `calm stretch only: ${vol}`);
+
+  const g = new PriceFeed((async () => new Response("[]")) as any, async () => new FakeSocket() as any);
+  for (let i = 0; i < 60; i++) g.recordCf("BTC", 100, now - 100 * 60_000 + i * 60_000);
+  for (let i = 0; i <= 20 * 6; i++) g.recordCf("BTC", 120, now - 20 * 60_000 + i * 10_000);
+  assert.equal(g.cfVolatility("BTC", now), null, "only 20 unbroken minutes: not enough yet");
+});

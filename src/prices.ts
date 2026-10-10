@@ -266,8 +266,14 @@ export class PriceFeed {
    * EWMA with a 20-minute half-life. Null until there's 45+ minutes of history.
    */
   cfVolatility(asset: string, now = Date.now()): number | null {
-    const h = this.cfHistory.get(asset);
-    if (!h || h.length < 2 || now - h[0].t < 45 * 60_000 || now - h[h.length - 1].t > 60_000) return null;
+    const all = this.cfHistory.get(asset);
+    if (!all || all.length < 2 || now - all[all.length - 1].t > 60_000) return null;
+    // Only the latest unbroken stretch: a gap (bot was down) would read as one
+    // giant one-minute move and inflate the volatility.
+    let start = all.length - 1;
+    while (start > 0 && all[start].t - all[start - 1].t <= 3 * 60_000) start--;
+    const h = all.slice(start);
+    if (now - h[0].t < 45 * 60_000) return null;
     const perMinute: number[] = [];
     let next = h[0].t;
     for (const p of h) {
@@ -278,6 +284,37 @@ export class PriceFeed {
     }
     if (perMinute.length < 30) return null;
     return ewmaVol(perMinute, 60, 20);
+  }
+
+  /** One sample per minute of the CF history, for saving across restarts: { asset: [[unixSec, value], ...] }. */
+  cfHistorySnapshot(): Record<string, [number, number][]> {
+    const out: Record<string, [number, number][]> = {};
+    for (const [asset, h] of this.cfHistory) {
+      const pts: [number, number][] = [];
+      let next = 0;
+      for (const p of h) {
+        if (p.t >= next) {
+          pts.push([Math.round(p.t / 1000), p.v]);
+          next = p.t + 60_000;
+        }
+      }
+      out[asset] = pts;
+    }
+    return out;
+  }
+
+  /** Restore saved CF history (older than anything already collected), keeping the last 3 hours. */
+  restoreCfHistory(saved: Record<string, [number, number][]>, now = Date.now()): void {
+    for (const [asset, pts] of Object.entries(saved ?? {})) {
+      if (!Array.isArray(pts)) continue;
+      const cur = this.cfHistory.get(asset) ?? [];
+      const firstLive = cur.length ? cur[0].t : Infinity;
+      const old = pts
+        .map(([s, v]) => ({ t: Number(s) * 1000, v: Number(v) }))
+        .filter((p) => p.v > 0 && p.t < firstLive && now - p.t <= 3 * 3600_000)
+        .sort((a, b) => a.t - b.t);
+      this.cfHistory.set(asset, [...old, ...cur]);
+    }
   }
 
   /** The live CF index value for an asset if a tick arrived in the last few seconds. */

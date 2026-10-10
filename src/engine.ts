@@ -85,6 +85,31 @@ export class Engine {
   lastError: string | null = null;
   heartbeat = 0;
   private bankrollCache = new Map<string, { value: number; at: number }>();
+  // ------------------------------------------------------------ CF history across restarts
+  private cfRestored = false;
+  private cfSavedAt = 0;
+
+  /**
+   * The CF index history (used for volatility) lives in memory, so a restart
+   * or deploy used to wipe it and fall back to inflated candle volatility for
+   * 45 minutes. Restore it once on start and save a 1-per-minute copy each minute.
+   */
+  persistCfHistory(nowMs = Date.now()): void {
+    if (!this.feed.cfHistory) return;
+    if (!this.cfRestored) {
+      this.cfRestored = true;
+      try {
+        this.feed.restoreCfHistory(JSON.parse(this.store.get("cf_history") ?? "{}"), nowMs);
+      } catch {
+        /* nothing saved yet */
+      }
+    }
+    if (nowMs - this.cfSavedAt >= 60_000) {
+      this.cfSavedAt = nowMs;
+      this.store.set("cf_history", JSON.stringify(this.feed.cfHistorySnapshot()));
+    }
+  }
+
   // ------------------------------------------------------------ learning data
   private snapAt = new Map<string, number>();
   private snapDay = { day: "", count: -1 };
@@ -356,6 +381,7 @@ export class Engine {
     if (this.s.cryptoEnabled && this.s.cfIndexFeed && this.feed.ensureIndexFeed && this.client.wsHeaders) {
       this.phase = "connecting CF Benchmarks index feed";
       await this.feed.ensureIndexFeed(this.s.cryptoAssets, { url: this.client.wsUrl(), headers: () => this.client.wsHeaders() });
+      this.persistCfHistory();
     } else if (this.feed.cfSocket) {
       this.feed.closeIndexFeed();
     }

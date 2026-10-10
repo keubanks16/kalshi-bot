@@ -1328,3 +1328,21 @@ test("range markets get one bet each, even when MAX_ORDERS_PER_MARKET allows 3",
   const n = store.openTrades().filter((t) => t.ticker === "KXBTCD-26OCT0911-T80000").length;
   assert.equal(n, 1, `range market got ${n} bets`);
 });
+
+test("engine saves the CF history once a minute and restores it after a restart", async () => {
+  const { engine, store } = setup();
+  const feed: any = { cfHistory: new Map([["BTC", [{ t: Date.now() - 120_000, v: 1 }, { t: Date.now(), v: 2 }]]]), cfHistorySnapshot() { return { BTC: [[1, 1]] }; }, restoreCfHistory() {} };
+  engine.feed = feed;
+  engine.persistCfHistory(1_000_000);
+  assert.equal(store.get("cf_history"), JSON.stringify({ BTC: [[1, 1]] }));
+  store.set("cf_history", "X");
+  engine.persistCfHistory(1_030_000); // within a minute: no write
+  assert.equal(store.get("cf_history"), "X");
+
+  const restored: any[] = [];
+  const { engine: e2, store: s2 } = setup();
+  s2.set("cf_history", JSON.stringify({ ETH: [[5, 2500]] }));
+  e2.feed = { cfHistory: new Map(), cfHistorySnapshot: () => ({}), restoreCfHistory: (x: any) => restored.push(x) } as any;
+  e2.persistCfHistory(5_000_000);
+  assert.deepEqual(restored, [{ ETH: [[5, 2500]] }]);
+});
