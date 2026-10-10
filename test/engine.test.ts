@@ -1210,3 +1210,35 @@ test("hybrid: a resting bid is swapped for the ask when the edge grows enough", 
   assert.equal(store.openTrades()[0].price, 0.55);
   assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /taking the ask at \$0\.55 instead/);
 });
+
+// ------------------------------------------------------------ taking the ask: fresh quote + slippage
+test("take: re-reads the ask right before buying and caps the order 1¢ above it", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", HYBRID_TAKE: "true" });
+  (client as any).getBalance = async () => 500;
+  (client as any).getMarket = async (t: string) => ({ ...client.all.find((m) => m.ticker === t), yes_ask_dollars: "0.5700" }); // moved up 2¢
+  const sent: any[] = [];
+  (client as any).createOrder = async (_t: string, side: string, count: number, price: number) => (sent.push({ side, count, price }), { order_id: "t1", fill_count_fp: String(count), average_fill_price: "0.5700", taker_fees_dollars: "0.05" });
+  store.set("strategy_modes", JSON.stringify({ crypto: "live" }));
+  await engine.tick();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].price, 0.58, "fresh 57¢ ask + 1¢");
+  const [t] = store.openTrades().filter((x) => x.mode === "live");
+  assert.equal(t.price, 0.57, "books the actual average fill, not the cap");
+});
+
+test("take: skips with a reason when the fresh ask no longer clears the bar", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", HYBRID_TAKE: "true" });
+  (client as any).getMarket = async (t: string) => ({ ...client.all.find((m) => m.ticker === t), yes_ask_dollars: "0.8000" });
+  await engine.tick();
+  assert.equal(store.openTrades().filter((t) => t.strategy === "crypto").length, 0);
+  assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /not bought: ask moved to \$0\.80; edge there is/);
+});
+
+test("take: a live order that gets nothing says why", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", HYBRID_TAKE: "true" });
+  (client as any).getBalance = async () => 500;
+  (client as any).createOrder = async () => ({ order_id: "t1", fill_count_fp: "0", status: "canceled" });
+  store.set("strategy_modes", JSON.stringify({ crypto: "live" }));
+  await engine.tick();
+  assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /not bought: nothing offered at \$0\.5\d or better when the order arrived \(Kalshi: canceled\)/);
+});

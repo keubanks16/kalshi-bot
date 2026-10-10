@@ -67,7 +67,8 @@ export interface Settings {
   makerStrategies: string[]; // strategies that rest post-only orders at the bid instead of taking the ask
   makerTtlSeconds: number;
   makerMaxChase: number;
-  hybridTake: boolean; // maker strategies: buy at the ask right away when the edge clears the bar even after the ask + taker fee
+  hybridTake: boolean;
+  takeSlippage: number; // when taking the ask, pay up to this much above the fresh ask if the edge still clears // maker strategies: buy at the ask right away when the edge clears the bar even after the ask + taker fee
   snapshotsEnabled: boolean; // record every priced crypto market + its outcome, for learning
   snapshotEverySeconds: number; // at most one snapshot per market this often
   snapshotDailyCap: number; // rows per day (Durable Object write budget)
@@ -164,6 +165,7 @@ export function loadSettings(env: Env): Settings {
     makerTtlSeconds: num(env, "MAKER_TTL_SECONDS", 120),
     makerMaxChase: num(env, "MAKER_MAX_CHASE", 0.03),
     hybridTake: bool(env, "HYBRID_TAKE", true),
+    takeSlippage: num(env, "TAKE_SLIPPAGE", 0.01),
     snapshotsEnabled: bool(env, "SNAPSHOTS_ENABLED", true),
     snapshotEverySeconds: num(env, "SNAPSHOT_EVERY_SECONDS", 300),
     snapshotDailyCap: num(env, "SNAPSHOT_DAILY_CAP", 10000),

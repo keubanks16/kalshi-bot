@@ -42,6 +42,8 @@ interface BuyOrder {
   expiresAt?: number;
   /** Buy at the ask now (taker) even for a maker strategy: the edge is big enough to pay for it. */
   take?: boolean;
+  /** Edge this bet must still clear at a given price (used to re-check a fresh ask). */
+  edgeBar?: (price: number) => number;
 }
 
 export function tradingDay(epochSeconds: number, timeZone: string): string {
@@ -580,7 +582,7 @@ export class Engine {
             if (t.take && sideOf(t.d) === resting.side && t.d.price !== undefined) {
               await this.cancelResting(resting, now, `taking the ask at $${t.d.price.toFixed(2)} instead (edge ${fmtEdge(t.d.edge)} after the taker fee)`);
               if (!this.store.restingOrders(this.modeFor("crypto")).some((o) => o.ticker === m.ticker)) {
-                const r = await this.enter({ strategy: "crypto", market: m, side: resting.side, contracts: t.d.contracts, price: t.d.price, pFair: resting.side === "yes" ? p : 1 - p, edge: t.d.edge, take: true });
+                const r = await this.enter({ strategy: "crypto", market: m, side: resting.side, contracts: t.d.contracts, price: t.d.price, pFair: resting.side === "yes" ? p : 1 - p, edge: t.d.edge, take: true, edgeBar: (pr) => requiredEdge(pr, limits) });
                 this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: t.d.action, reason: `${t.d.reason}; ${r.message}`, p_fair: p, price: t.d.price });
                 st.lastLogged = now;
               }
@@ -610,7 +612,7 @@ export class Engine {
         if (chase && (side !== chase.side || d.price === undefined || d.price > chase.cap + 1e-9)) continue;
         if (side && d.price !== undefined) {
           if (this.usesMaker("crypto") && !h.take) this.chaseBase.set(m.ticker, chase ? chase.base : d.price);
-          const r = await this.enter({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, take: h.take });
+          const r = await this.enter({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, take: h.take, edgeBar: (pr) => requiredEdge(pr, limits) });
           reason = `${d.reason}; ${r.message}`;
           this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: d.action, reason, p_fair: p, price: d.price });
           st.lastLogged = now;
@@ -721,6 +723,7 @@ export class Engine {
             // never leave a bid resting into the game
             expiresAt: start - this.s.sportsMinMinutesBeforeStart * 60,
             take: best.take,
+            edgeBar: () => this.s.sportsMinEdge,
           });
           if (r.ok) {
             traded++;
@@ -836,7 +839,7 @@ export class Engine {
       const { d, take } = this.decideHybrid(m, p, await this.bankroll(this.modeFor("ai")), { ...this.s, minEdge: this.s.aiMinEdge }, "ai");
       const side = sideOf(d);
       if (side && d.price !== undefined) {
-        const r = await this.enter({ strategy: "ai", market: { ...pick, ...m }, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, note: f.summary, take });
+        const r = await this.enter({ strategy: "ai", market: { ...pick, ...m }, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, note: f.summary, take, edgeBar: () => this.s.aiMinEdge });
         action = r.ok ? `${r.message} (edge ${fmtEdge(d.edge)})` : `edge ${fmtEdge(d.edge)} but blocked by limits`;
       } else {
         action = `no bet: ${d.reason}`;
@@ -1032,6 +1035,34 @@ export class Engine {
   }
 
   /**
+   * Before taking the ask, re-read the market: quotes from the start of the
+   * round can be seconds old in fast markets, and an order capped at a stale
+   * ask never fills. Pay up to TAKE_SLIPPAGE above the fresh ask, as long as
+   * the bet still clears its edge bar there. Returns the order to send, or
+   * null (with skipWhy) if it's no longer worth it.
+   */
+  private async freshTake(o: BuyOrder): Promise<BuyOrder | null> {
+    let m: Market;
+    try {
+      m = { ...o.market, ...(await this.client.getMarket(o.market.ticker)) };
+    } catch (e) {
+      if (e instanceof KalshiError && e.status === 429) throw e;
+      return o; // couldn't refresh: try the quote we have
+    }
+    const ask = dollars(m, o.side === "yes" ? "yes_ask" : "no_ask");
+    if (ask === null || o.pFair === undefined || o.pFair === null) return { ...o, market: m };
+    const bar = o.edgeBar ?? (() => this.s.minEdge);
+    const edgeAt = (price: number) => o.pFair! - price - takerFee(100, price, this.s.takerFeeRate) / 100;
+    const withSlip = Math.min(0.99, Math.round((ask + this.s.takeSlippage) * 100) / 100);
+    const limit = edgeAt(withSlip) >= bar(withSlip) ? withSlip : edgeAt(ask) >= bar(ask) ? ask : null;
+    if (limit === null) {
+      this.skipWhy = `ask moved to $${ask.toFixed(2)}; edge there is ${fmtEdge(edgeAt(ask))}, below the bar`;
+      return null;
+    }
+    return { ...o, market: m, price: limit, edge: edgeAt(limit) };
+  }
+
+  /**
    * Decide a bet for a maker strategy, hybrid-style: if buying at the ask right
    * now still clears the edge bar after the taker fee, take it (a resting bid
    * would likely miss it as the price runs away); otherwise rest a bid.
@@ -1048,6 +1079,11 @@ export class Engine {
   async enter(o: BuyOrder): Promise<{ ok: boolean; message: string }> {
     const sideUp = o.side.toUpperCase();
     if (!this.usesMaker(o.strategy) || o.take) {
+      if (o.take) {
+        const fresh = await this.freshTake(o);
+        if (!fresh) return { ok: false, message: `not bought: ${this.skipWhy}` };
+        o = fresh;
+      }
       const filled = await this.buy(o);
       const how = o.take ? " (took the ask: worth it even after the taker fee)" : "";
       return filled ? { ok: true, message: `bought ${filled} ${sideUp} @ $${o.price.toFixed(2)}${how}` } : { ok: false, message: `not bought: ${this.skipWhy || "not filled"}` };
@@ -1356,16 +1392,24 @@ export class Engine {
         if (!order) return (this.skipWhy = this.lastError ?? "Kalshi didn't accept the order"), 0;
         orderId = order.order_id ?? null;
         filled = Math.floor(Number(order.fill_count_fp ?? order.fill_count ?? 0));
+        // An IOC limit can fill better than its cap; book what was actually paid.
+        const avgYes = Number(order.average_fill_price);
+        if (filled > 0 && avgYes > 0 && avgYes < 1) {
+          const avg = Math.round((o.side === "yes" ? avgYes : 1 - avgYes) * 10000) / 10000;
+          if (avg <= o.price + 1e-9) o = { ...o, price: avg };
+        }
         fee = Number(order.taker_fees_dollars ?? 0) || takerFee(filled, o.price, this.s.takerFeeRate);
+        if (filled < 1) this.skipWhy = `nothing offered at $${o.price.toFixed(2)} or better when the order arrived (Kalshi: ${String(order.status ?? "no fill")})`;
       } catch (e) {
         this.lastError = `Order on ${m.ticker} failed: ${(e as Error).message}`;
         return 0;
       }
     } else {
       // Paper: assume we take the displayed ask, limited by the size showing there.
-      const shown = askSize(m, o.side);
+      const shown = askSize(o.market, o.side);
       filled = shown === null ? contracts : Math.min(contracts, shown);
       fee = takerFee(filled, o.price, this.s.takerFeeRate);
+      if (filled < 1) this.skipWhy = "nothing offered at the ask";
     }
     if (filled < 1) return 0;
 
