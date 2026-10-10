@@ -176,3 +176,35 @@ test("scanner: an Odds API error shows up as the status", async () => {
   const v = await sc.run(NOW);
   assert.match(v.status, /College football: Odds API 401/);
 });
+
+test("scanner: retries a 429 and succeeds", async () => {
+  const calls: string[] = [];
+  const real = fakeFetch(calls);
+  let hits = 0;
+  const sc = new PicksScanner(settings(), kv(), "k", (async (u: string, i: any) => {
+    if (u.includes("/odds") && hits++ === 0) return new Response('{"message":"Requests are too frequent"}', { status: 429 });
+    return (real as any)(u, i);
+  }) as any);
+  sc.spacingMs = 1;
+  const v = await sc.run(NOW);
+  assert.doesNotMatch(v.status, /429|too many/);
+});
+
+test("scanner: repeated rate limits collapse into one short note", async () => {
+  const calls: string[] = [];
+  const real = fakeFetch(calls);
+  const sc = new PicksScanner(settings(), kv(), "k", (async (u: string, i: any) =>
+    u.includes("/odds") ? new Response("{}", { status: 429 }) : (real as any)(u, i)) as any);
+  sc.spacingMs = 1;
+  const v = await sc.run(NOW);
+  assert.doesNotMatch(v.status, /EXCEEDED|\{/);
+  assert.match(v.status, /skipped: odds site said too many requests/);
+});
+
+test("scanner: clearShot empties the screenshot card", () => {
+  const store = kv();
+  const sc = new PicksScanner(settings(), store, "k", fakeFetch([]) as any);
+  store.set("pp_shot_view", JSON.stringify({ ts: 1, status: "x", results: [] }));
+  sc.clearShot();
+  assert.equal(sc.shotView(), null);
+});

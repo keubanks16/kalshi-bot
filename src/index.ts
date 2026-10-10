@@ -117,6 +117,7 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
     const form = await req.formData();
     const action = String(form.get("action") ?? "");
     await stub.setPicks(action);
+    if (action === "clearshot") return new Response(null, { status: 303, headers: { Location: `/?tab=picks&msg=${encodeURIComponent("Screenshot results cleared.")}#shot` } });
     const msg = action === "refresh" ? "Checking PrizePicks now — refresh in a few seconds." : action === "off" ? "PrizePicks finder off." : "PrizePicks finder on.";
     return new Response(null, { status: 303, headers: { Location: `/?tab=picks&msg=${encodeURIComponent(msg)}` } });
   }

@@ -443,10 +443,29 @@ export class PicksScanner {
     return this.s.intervalMinutes > 0 ? this.s.intervalMinutes * 60 : 10 * 60;
   }
 
+  /** Pause between Odds API calls (ms); tests set 0. The API rejects bursts with 429 "too frequent". */
+  spacingMs = 400;
+  private lastCall = 0;
+
   private async json(url: string): Promise<{ body: any; res: Response }> {
-    const res = await this.fetchFn(url, { signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) throw new Error(`Odds API ${res.status}: ${(await res.text()).slice(0, 120)}`);
-    return { body: await res.json(), res };
+    for (let attempt = 0; ; attempt++) {
+      const wait = this.lastCall + this.spacingMs - Date.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      this.lastCall = Date.now();
+      const res = await this.fetchFn(url, { signal: AbortSignal.timeout(15_000) });
+      if (res.status === 429 && attempt < 3) {
+        await new Promise((r) => setTimeout(r, this.spacingMs * 3 * (attempt + 1)));
+        continue;
+      }
+      if (res.status === 429) throw new Error("Odds API rate limit");
+      if (!res.ok) throw new Error(`Odds API ${res.status}: ${(await res.text()).slice(0, 120)}`);
+      return { body: await res.json(), res };
+    }
+  }
+
+  /** Clear the screenshot results card. */
+  clearShot(): void {
+    this.store.set("pp_shot_view", "null");
   }
 
   /**
@@ -668,16 +687,21 @@ export class PicksScanner {
     const slips = bestSlips(picks, this.s.payouts);
     const sports = this.s.sports.map((k) => SPORT_LABELS[k] ?? k).join(", ");
     const budget = budgetHit ? `; daily odds budget used (${used} of ${this.s.dailyCredits} credits), so later games weren't checked` : "";
+    const counts = new Map<string, number>();
+    for (const p of problems) counts.set(p, (counts.get(p) ?? 0) + 1);
+    const problemText = [...counts]
+      .map(([p, n]) => (/rate limit/.test(p) ? `${n} game${n > 1 ? "s" : ""} skipped: odds site said too many requests, tap Check now again in a minute` : n > 1 ? `${p} (×${n})` : p))
+      .join(" · ");
     const status =
       problems.length && !games
-        ? problems.join(" · ")
+        ? problemText
         : !games
           ? budgetHit
             ? `Daily odds budget used (${used} of ${this.s.dailyCredits} credits). Resumes tomorrow.`
             : `No ${sports} games in the next ${this.s.hoursAhead} hours.`
           : !linesSeen
             ? `Checked ${games} ${sports} game${games > 1 ? "s" : ""}, but PrizePicks has no lines posted for them yet${budget}.`
-            : `Priced ${priced} of ${linesSeen} PrizePicks lines in ${games} ${sports} game${games > 1 ? "s" : ""}${budget}.${this.s.intervalMinutes > 0 ? ` Next check in ${this.s.intervalMinutes} min.` : ""}${problems.length ? ` (${problems.join(" · ")})` : ""}`;
+            : `Priced ${priced} of ${linesSeen} PrizePicks lines in ${games} ${sports} game${games > 1 ? "s" : ""}${budget}.${this.s.intervalMinutes > 0 ? ` Next check in ${this.s.intervalMinutes} min.` : ""}${problems.length ? ` (${problemText})` : ""}`;
     const v: PicksView = { ts: now, status, picks: picks.slice(0, 40), slips, linesSeen, priced };
     this.store.set("picks_view", JSON.stringify(v));
     return v;

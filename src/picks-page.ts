@@ -91,6 +91,7 @@ ${r.side ? `<span class="side ${r.side === "More" ? "more" : "less"}">${esc(r.si
 <div class="sub">Upload a PrizePicks screenshot. Claude reads the picks; the chances come from sportsbook odds for the same player, stat and line.</div>
 ${upload}
 ${shot ? `<div style="margin-top:10px">${esc(shot.status)} <span class="sub">${esc(date(shot.ts))} ${esc(time(shot.ts))}</span></div>` : ""}
+${shot && opts.authed ? `<form method="post" action="/picks" style="margin-top:8px"><input type="hidden" name="action" value="clearshot"><button class="pill-off">Clear results</button></form>` : ""}
 ${shotRows ? `<table class="pk">${shotRows}</table>` : ""}
 ${shotRows ? `<div class="sub" style="margin-top:8px">A range like 48–55% means the books don't have PrizePicks' exact line, so the chance is somewhere between the nearest book lines. Demons and goblins have their own payouts, so check the multiplier your app shows.</div>` : ""}</div>`;
 

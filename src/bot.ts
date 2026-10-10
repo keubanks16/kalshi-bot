@@ -181,6 +181,7 @@ export class Bot extends DurableObject<Env> {
   }
 
   async setPicks(action: string): Promise<void> {
+    if (action === "clearshot") return this.picks.clearShot();
     if (action === "on" || action === "off") this.store.set("picks_enabled", action);
     if (action === "refresh" || action === "on") this.picks.request();
     this.runPicks();
