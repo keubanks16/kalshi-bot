@@ -972,3 +972,46 @@ test("maker bids: the bot cancels before Kalshi's own expiry, which stays as a b
   assert.ok(kalshiExp > botExp, `Kalshi expiry ${kalshiExp} after the bot's ${botExp}`);
   assert.ok(kalshiExp - botExp <= 30);
 });
+
+// ------------------------------------------------------------ chasing
+test("chase: when the price moves up a little, the bid follows it", async () => {
+  const { store, client, again } = makerSetup();
+  await again();
+  assert.equal(store.restingOrders()[0].price, 0.54); // bid 53, ask 55
+  client.all[0].yes_bid_dollars = "0.5500"; // someone outbids us
+  client.all[0].yes_ask_dollars = "0.5700";
+  await again(10);
+  const [o] = store.restingOrders();
+  assert.equal(o.price, 0.56, "re-posted 1¢ above the new best bid");
+  assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /price moved; re-posting at \$0\.56 \(chasing up to \$0\.57\)/);
+});
+
+test("chase: never more than MAKER_MAX_CHASE above the first price", async () => {
+  const { store, client, again } = makerSetup();
+  await again();
+  client.all[0].yes_bid_dollars = "0.6000"; // jumped 7¢
+  client.all[0].yes_ask_dollars = "0.6200";
+  await again(10);
+  const [o] = store.restingOrders();
+  assert.equal(o.price, 0.54, "stays put: 61¢ would be past the 57¢ cap");
+});
+
+test("chase: won't follow into a price where the edge is gone", async () => {
+  const { engine, store, client, again } = makerSetup({ MAKER_MAX_CHASE: "0.10" });
+  await again();
+  (engine.feed as any).spot = async () => 80110; // still worth it at 54¢, not at 56¢
+  client.all[0].yes_bid_dollars = "0.5500";
+  client.all[0].yes_ask_dollars = "0.5700";
+  await again(10);
+  const prices = store.restingOrders().map((o) => o.price);
+  assert.deepEqual(prices, [0.54], "keeps the 54¢ bid, doesn't chase to 56¢");
+});
+
+test("chase: off when MAKER_MAX_CHASE is 0", async () => {
+  const { store, client, again } = makerSetup({ MAKER_MAX_CHASE: "0" });
+  await again();
+  client.all[0].yes_bid_dollars = "0.5500";
+  client.all[0].yes_ask_dollars = "0.5700";
+  await again(10);
+  assert.equal(store.restingOrders()[0].price, 0.54);
+});

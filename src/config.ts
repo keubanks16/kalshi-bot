@@ -64,7 +64,8 @@ export interface Settings {
   takerFeeRate: number;
   makerFeeRate: number; // Kalshi's maker fee on markets that charge one (many charge none)
   makerStrategies: string[]; // strategies that rest post-only orders at the bid instead of taking the ask
-  makerTtlSeconds: number; // crypto: cancel a resting order after this long
+  makerTtlSeconds: number;
+  makerMaxChase: number; // crypto: how far (dollars) a resting bid may follow the price up, in total // crypto: cancel a resting order after this long
   makerSlowTtlSeconds: number; // sports and AI: slower markets, so orders rest longer
   modelWeight: number; // 0..1, how much to trust our own estimates vs the market price
 
@@ -152,6 +153,7 @@ export function loadSettings(env: Env): Settings {
       .map((x) => x.trim().toLowerCase())
       .filter((x) => x && x !== "arb" && x !== "none"),
     makerTtlSeconds: num(env, "MAKER_TTL_SECONDS", 120),
+    makerMaxChase: num(env, "MAKER_MAX_CHASE", 0.03),
     makerSlowTtlSeconds: num(env, "MAKER_SLOW_TTL_SECONDS", 1800),
     modelWeight: num(env, "MODEL_WEIGHT", 0.5),
 

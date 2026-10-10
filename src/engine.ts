@@ -81,6 +81,8 @@ export class Engine {
   lastError: string | null = null;
   heartbeat = 0;
   private bankrollCache = new Map<string, { value: number; at: number }>();
+  /** First price of each crypto market's current bid, so chasing stays within MAKER_MAX_CHASE of it. */
+  private chaseBase = new Map<string, number>();
   private modeLimits: Partial<Record<"paper" | "live", Partial<Limits>>> = {};
   private modeLimitsPrev: Partial<Record<"paper" | "live", Partial<Limits>>> = {};
   /** Spending limits in force for a mode: its own saved set, else the shared/default ones. */
@@ -432,17 +434,37 @@ export class Engine {
         // A resting bid tends to fill just as the price turns against it, so
         // re-check it every time: if the edge at our price is gone, pull it.
         const resting = this.store.restingOrders(this.modeFor("crypto")).find((o) => o.ticker === m.ticker);
+        const q = this.quotes(m, "crypto");
+        let chase: { side: "yes" | "no"; cap: number; base: number } | null = null;
         if (resting) {
-          const left = (resting.side === "yes" ? p : 1 - p) - resting.price - takerFee(100, resting.price, this.s.makerFeeRate) / 100;
-          if (left < requiredEdge(resting.price, limits)) await this.cancelResting(resting, now, `edge at this price is now ${fmtEdge(left)}`);
-          continue;
+          const edgeAt = (price: number) => (resting.side === "yes" ? p : 1 - p) - price - takerFee(100, price, this.s.makerFeeRate) / 100;
+          const left = edgeAt(resting.price);
+          if (left < requiredEdge(resting.price, limits)) {
+            await this.cancelResting(resting, now, `edge at this price is now ${fmtEdge(left)}`);
+            continue;
+          }
+          // Chase a little: if someone now bids above us (the price moved away),
+          // re-post just above them, as long as the bet still clears its edge bar
+          // there and we stay within MAKER_MAX_CHASE of the first price.
+          const bestBid = resting.side === "yes" ? dollars(m, "yes_bid") : (dollars(m, "no_bid") ?? (dollars(m, "yes_ask") === null ? null : 1 - dollars(m, "yes_ask")!));
+          const next = resting.side === "yes" ? q.yes : q.no;
+          const base = this.chaseBase.get(m.ticker) ?? resting.price;
+          const cap = Math.round((base + this.s.makerMaxChase) * 100) / 100;
+          const outbid = bestBid !== null && bestBid > resting.price + 0.005;
+          if (!outbid || this.s.makerMaxChase <= 0 || resting.filled > 0 || next === null || next <= resting.price + 1e-9 || next > cap + 1e-9) continue;
+          if (edgeAt(next) < requiredEdge(next, limits)) continue;
+          await this.cancelResting(resting, now, `price moved; re-posting at $${next.toFixed(2)} (chasing up to $${cap.toFixed(2)})`);
+          if (this.store.restingOrders(this.modeFor("crypto")).some((o) => o.ticker === m.ticker)) continue; // cancel didn't land yet
+          if (this.store.marketExposure(m.ticker, this.modeFor("crypto")).orders >= this.s.maxOrdersPerMarket) continue; // it filled after all
+          chase = { side: resting.side, cap, base };
         }
 
-        const q = this.quotes(m, "crypto");
         const d = decideBinary(p, q.yes, q.no, bankroll, { ...limits, takerFeeRate: q.feeRate });
         const side = sideOf(d);
         let reason = d.reason;
+        if (chase && (side !== chase.side || d.price === undefined || d.price > chase.cap + 1e-9)) continue;
         if (side && d.price !== undefined) {
+          if (this.usesMaker("crypto")) this.chaseBase.set(m.ticker, chase ? chase.base : d.price);
           const r = await this.enter({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge });
           reason = `${d.reason}; ${r.message}`;
           this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: d.action, reason, p_fair: p, price: d.price });

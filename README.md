@@ -60,6 +60,7 @@ Everything is held to settlement and then marked as a win or loss.
 Crypto, sports and AI bets are placed as **maker orders**: a post-only limit bid 1¢ above the best bid (never at or through the ask), instead of buying at the ask. That avoids Kalshi's taker fee, about 7% × P × (1−P) per contract, which can eat a third or more of a 4–5¢ edge. Edges are worked out at the bid price with the maker fee (`MAKER_FEE_RATE`, 0.0175, for markets that charge one).
 
 - A resting bid's unfilled part counts against every risk limit as if it had filled.
+- If the price moves away from a resting crypto bid, the bid follows it: it's re-posted just above the new best bid, but only while the bet still clears its edge bar and stays within 3¢ (`MAKER_MAX_CHASE`) of the first price. Set it to `0` to turn chasing off.
 - Crypto bids are cancelled after 2 minutes (`MAKER_TTL_SECONDS`), and sooner if a re-check finds the edge at our price is gone. Sports and AI bids rest up to 30 minutes (`MAKER_SLOW_TTL_SECONDS`), and sports bids always cancel before the game starts. Nothing rests into a market's final 2 minutes.
 - Every live order carries Kalshi's own expiry time, so Kalshi cancels it even if the bot stops.
 - The kill switch cancels all resting orders.
