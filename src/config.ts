@@ -113,6 +113,7 @@ export interface Settings {
   maxOpenRisk: number;
   maxDailyLoss: number;
   maxOrdersPerMarket: number;
+  maxOrdersPerRangeMarket: number; // "between" (range/bucket) markets: bets per market
 }
 
 function str(env: Env, key: string, dflt: string): string {
@@ -212,6 +213,7 @@ export function loadSettings(env: Env): Settings {
     maxOpenRisk: num(env, "MAX_OPEN_RISK", 50),
     maxDailyLoss: num(env, "MAX_DAILY_LOSS", 25),
     maxOrdersPerMarket: num(env, "MAX_ORDERS_PER_MARKET", 3),
+    maxOrdersPerRangeMarket: num(env, "MAX_ORDERS_PER_RANGE_MARKET", 1),
   };
 }
 

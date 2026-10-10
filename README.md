@@ -12,7 +12,7 @@ A bot can only find a good trade when it has a source of truth that's better tha
 
 - It rebuilds the coin's price the way CF Benchmarks builds the index Kalshi settles on: **order-book mid-prices** from six of the seven constituent exchanges (Coinbase, Kraken, Bitstamp, Gemini, Crypto.com, Bullish; LMAX has no public API), combined as a volume-weighted median. With `LIVE_STREAMS` on, Coinbase and Kraken stream live over websockets; the rest are polled each round.
 - **Preferred price source:** Kalshi's own CF Benchmarks feed (BRTI, ETHUSD_RTI, SOLUSD_RTI, XRPUSD_RTI, DOGEUSD_RTI) over Kalshi's WebSocket, at up to 5 updates a second. That's the exact index these markets settle on. It needs your Kalshi API keys. If it's missing or more than 3 seconds stale, the bot falls back to rebuilding the index from the exchanges as below. `CF_INDEX_FEED=false` turns it off. The **Now** card says which source is in use.
-- It also measures the coin's recent volatility.
+- It also measures the coin's recent volatility. For markets closing within 2 hours, it uses the CF index itself, sampled once a minute over up to 3 hours, once it has 45 minutes of it. Last-trade candles bounce between bid and ask and overstated real movement by 30–45% in testing. Until then, and for longer markets, it uses exchange candles.
 - It computes the probability the price finishes past the strike, accounting for Kalshi's 60-second settlement average.
 - If YES or NO is cheaper than that probability by more than `MIN_EDGE` after fees, it buys. It sizes the bet with quarter-Kelly.
 - It only buys contracts priced 15¢–85¢ by default (editable on the dashboard), skipping long shots and near-sure things where the model is least reliable and fees bite hardest.
@@ -166,6 +166,7 @@ All are in `wrangler.jsonc` → `vars`.
 - `CRYPTO_ENABLED` / `ARB_ENABLED` — turn either strategy off.
 - `CRYPTO_ASSETS` — which coins to trade.
 - `KELLY_FRACTION` — 0.25 is conservative; don't go above 0.5.
+- `MAX_ORDERS_PER_RANGE_MARKET` — range ("between") markets get 1 bet each by default, so the bot can't keep adding to the same range bet as it did overnight.
 - `MAX_ORDERS_PER_MARKET` — up to 3 bets per market by default. The bot can add to a position it still likes, never bets the opposite side of one it holds, and only ever has one resting bid per market. The per-trade and per-market dollar limits still cap the total.
 - `AUTO_FUND_SHARDS` — on by default. Kalshi keeps cash separately per exchange shard (crypto is shard 2, sports such as baseball, basketball and tennis shard 3), and API orders, unlike app orders, can only spend cash already on their market's shard. When a live bet's shard is short, the bot moves cash there from your fullest other shard, topping it up to your live bankroll. It only moves money between shards of your own account, at most once a minute per shard, and logs every move. The bet goes through on the next round, once Kalshi has processed the transfer. Set `false` to manage shards yourself on Kalshi's Exchange Indexes page.
 - `MIN_ONE_CONTRACT` — on by default. When a bet clears the edge bar but sizes to under one contract (common with a small bankroll), it buys one contract anyway, still within every limit. Set `false` to skip those bets instead.

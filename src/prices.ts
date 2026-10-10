@@ -145,6 +145,10 @@ export class PriceFeed {
   cfMessages = 0;
   cfError: string | null = null;
   private cfConnecting = false;
+  /** asset -> CF index values sampled every ~10s for the last 3 hours (for volatility). */
+  cfHistory = new Map<string, { t: number; v: number }[]>();
+  /** asset -> where the last volatility() came from */
+  volSource: Record<string, "cf" | "candles"> = {};
   /** asset -> where the last spot() price came from */
   spotSource: Record<string, "cf" | "exchanges"> = {};
 
@@ -217,7 +221,9 @@ export class PriceFeed {
             const value = Number(m.msg?.value_usd);
             if (asset && value > 0) {
               this.cfMessages++;
-              this.cf.set(asset, { value, at: Date.now(), sourceTs: Number(m.msg?.source_ts_ms) || Date.now() });
+              const now = Date.now();
+              this.cf.set(asset, { value, at: now, sourceTs: Number(m.msg?.source_ts_ms) || now });
+              this.recordCf(asset, value, now);
             }
           } else if (m.type === "error") {
             this.cfError = `${m.msg?.code ?? ""} ${m.msg?.msg ?? JSON.stringify(m.msg ?? {})}`.trim();
@@ -242,6 +248,36 @@ export class PriceFeed {
     } finally {
       this.cfConnecting = false;
     }
+  }
+
+  /** Keep a sparse (every ~10s) 3-hour history of the CF index for volatility. */
+  recordCf(asset: string, value: number, now = Date.now()): void {
+    let h = this.cfHistory.get(asset);
+    if (!h) this.cfHistory.set(asset, (h = []));
+    if (h.length && now - h[h.length - 1].t < 10_000) return;
+    h.push({ t: now, v: value });
+    while (h.length && now - h[0].t > 3 * 3600_000) h.shift();
+  }
+
+  /**
+   * Volatility from the CF index itself: the clean, mid-price-based number
+   * these markets settle on. Last-trade candles bounce between bid and ask
+   * and overstate how much the price really moves. Sampled once a minute,
+   * EWMA with a 20-minute half-life. Null until there's 45+ minutes of history.
+   */
+  cfVolatility(asset: string, now = Date.now()): number | null {
+    const h = this.cfHistory.get(asset);
+    if (!h || h.length < 2 || now - h[0].t < 45 * 60_000 || now - h[h.length - 1].t > 60_000) return null;
+    const perMinute: number[] = [];
+    let next = h[0].t;
+    for (const p of h) {
+      if (p.t >= next) {
+        perMinute.push(p.v);
+        next = p.t + 60_000;
+      }
+    }
+    if (perMinute.length < 30) return null;
+    return ewmaVol(perMinute, 60, 20);
   }
 
   /** The live CF index value for an asset if a tick arrived in the last few seconds. */
@@ -307,6 +343,14 @@ export class PriceFeed {
    */
   async volatility(asset: string, secondsLeft: number): Promise<number> {
     const hourly = secondsLeft > 2 * 3600;
+    if (!hourly) {
+      const cfVol = this.cfVolatility(asset);
+      if (cfVol !== null) {
+        this.volSource[asset] = "cf";
+        return cfVol;
+      }
+    }
+    this.volSource[asset] = "candles";
     const key = `${asset}:${hourly ? "1h" : "1m"}`;
     const hit = this.vols.get(key);
     const ttl = hourly ? 15 * 60_000 : 60_000;

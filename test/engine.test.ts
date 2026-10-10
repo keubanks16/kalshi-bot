@@ -1317,3 +1317,14 @@ test("dashboard shows the 15-minute toggle under Crypto", () => {
   assert.ok(html.includes('action="/crypto15m"') && html.includes("15-minute markets"));
   assert.match(html, /name="on" value="on"><button class="pill-off">Off/);
 });
+
+test("range markets get one bet each, even when MAX_ORDERS_PER_MARKET allows 3", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false", MAX_ORDERS_PER_MARKET: "3", MAX_COST_PER_ORDER: "2", MAX_COST_PER_MARKET: "50", EXIT_ENABLED: "false" });
+  Object.assign(client.all[0], { strike_type: "between", floor_strike: 80500, cap_strike: 80700 });
+  for (let i = 0; i < 6; i++) {
+    engine.series.forEach((st) => (st.nextCheck = 0));
+    await engine.tick();
+  }
+  const n = store.openTrades().filter((t) => t.ticker === "KXBTCD-26OCT0911-T80000").length;
+  assert.equal(n, 1, `range market got ${n} bets`);
+});

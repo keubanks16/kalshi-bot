@@ -169,3 +169,28 @@ test("CF feed: needs API keys; reports Kalshi errors", async () => {
   sock.emit("message", { data: JSON.stringify({ type: "error", msg: { code: 6, msg: "Unknown channel" } }) });
   assert.equal(f2.cfError, "6 Unknown channel");
 });
+
+test("volatility comes from the CF index once there's 45+ minutes of it, and matches the real movement", async () => {
+  const feed = new PriceFeed((async () => {
+    throw new Error("no candles needed");
+  }) as any, async () => new FakeSocket() as any);
+  const t0 = Date.now() - 60 * 60_000;
+  // 60 minutes of index values alternating ±0.1% per minute: annualized vol ≈ 0.001 * sqrt(525600) ≈ 0.725
+  let v = 100;
+  for (let i = 0; i <= 60 * 6; i++) {
+    if (i % 6 === 0 && i) v *= i % 12 === 0 ? 1.001 : 1 / 1.001;
+    feed.recordCf("BTC", v, t0 + i * 10_000);
+  }
+  const vol = await feed.volatility("BTC", 900);
+  assert.ok(Math.abs(vol - 0.725) < 0.03, `vol ${vol}`);
+  assert.equal(feed.volSource.BTC, "cf");
+});
+
+test("volatility falls back to candles until the CF history is long enough", async () => {
+  const candles = Array.from({ length: 120 }, (_, i) => [1_000_000 + i * 60, 0, 0, 0, 100 * (i % 2 ? 1.001 : 1), 0]);
+  const feed = new PriceFeed((async () => new Response(JSON.stringify(candles))) as any, async () => new FakeSocket() as any);
+  feed.recordCf("BTC", 100, Date.now() - 10 * 60_000);
+  feed.recordCf("BTC", 100.1, Date.now());
+  await feed.volatility("BTC", 900);
+  assert.equal(feed.volSource.BTC, "candles");
+});
