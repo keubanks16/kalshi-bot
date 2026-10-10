@@ -81,6 +81,59 @@ export class Engine {
   lastError: string | null = null;
   heartbeat = 0;
   private bankrollCache = new Map<string, { value: number; at: number }>();
+  // ------------------------------------------------------------ learning data
+  private snapAt = new Map<string, number>();
+  private snapDay = { day: "", count: -1 };
+
+  /**
+   * Save what the bot saw for this market (model odds, market quotes, spot,
+   * volatility, time left) so its outcome can later be learned from. At most
+   * one per market every SNAPSHOT_EVERY_SECONDS, skipping near-certain ones,
+   * within SNAPSHOT_DAILY_CAP rows a day.
+   */
+  private recordSnapshot(m: Market, series: string, asset: string, now: number, secsLeft: number, spot: number, vol: number, model: number, yb: number | null, ya: number | null, averaged: boolean): void {
+    if (!this.s.snapshotsEnabled) return;
+    if (model < 0.01 || model > 0.99) return; // already decided: teaches nothing
+    if (now - (this.snapAt.get(m.ticker) ?? 0) < this.s.snapshotEverySeconds) return;
+    const day = tradingDay(now, this.s.timezone);
+    if (this.snapDay.day !== day) this.snapDay = { day, count: this.store.snapshotsToday(day) };
+    if (this.snapDay.count >= this.s.snapshotDailyCap) return;
+    this.snapAt.set(m.ticker, now);
+    if (this.snapAt.size > 5000) for (const [k, t] of this.snapAt) if (now - t > 3600) this.snapAt.delete(k);
+    this.store.addSnapshot({
+      ts: now,
+      day,
+      ticker: m.ticker,
+      series,
+      asset,
+      strike_type: m.strike_type ? String(m.strike_type) : null,
+      floor_strike: num(m.floor_strike),
+      cap_strike: num(m.cap_strike),
+      close_ts: ts(m.close_time),
+      secs_left: Math.round(secsLeft),
+      spot,
+      vol: Math.round(vol * 10000) / 10000,
+      model_p: Math.round(model * 10000) / 10000,
+      yes_bid: yb,
+      yes_ask: ya,
+      averaged: averaged ? 1 : 0,
+    });
+    this.snapDay.count++;
+  }
+
+  /** Fill in outcomes for snapshots whose markets have settled (runs with settlement). */
+  async labelSnapshots(now: number): Promise<void> {
+    const tickers = this.store.tickersToLabel(now, 100);
+    if (tickers.length) {
+      for (const m of await this.client.getMarketsByTicker(tickers)) {
+        const r = String(m.result ?? "").toLowerCase();
+        if (r === "yes" || r === "no") this.store.labelSnapshots(m.ticker, r, now);
+      }
+    }
+    this.store.voidStaleSnapshots(now);
+    if (Math.floor(now / 3600) !== Math.floor((now - 60) / 3600)) this.store.pruneSnapshots(now);
+  }
+
   private exitTriedAt = new Map<string, number>();
 
   /**
@@ -274,6 +327,10 @@ export class Engine {
       this.phase = "settling trades";
       await this.settle();
       this.lastSettle = now;
+      if (this.s.snapshotsEnabled) {
+        this.phase = "labelling learning data";
+        await this.labelSnapshots(now);
+      }
     }
     if (this.store.killSwitchOn()) {
       if (this.store.restingOrders().length) {
@@ -491,6 +548,7 @@ export class Engine {
           if (!best) best = { ticker: m.ticker, action: "hold", reason: "book too thin to price", p: model, price: null, edge: -Infinity };
           continue;
         }
+        this.recordSnapshot(m, series, st.asset, now, secondsLeft, spot, vol, model, yb, ya, averaged);
         const p = blendWithMarket(model, yb, ya, this.s.modelWeight);
         const limits = { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge };
         if (this.s.exitEnabled) await this.maybeExit(m, p, now);

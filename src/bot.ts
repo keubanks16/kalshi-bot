@@ -17,6 +17,7 @@ export interface Snapshot {
   views?: string[];
   canGoLive?: boolean;
   keysSet?: boolean;
+  learning?: { total: number; labelled: number; days: number; first: number | null; enabled: boolean };
   /** Available cash in Kalshi as the bot last read it (only while something trades live). */
   kalshiCash?: { value: number | null; at: number | null; error: string | null; byIndex?: Record<number, number> | null; lastMove?: { text: string; at: number; ok: boolean } | null } | null;
   message?: string | null;
@@ -244,6 +245,7 @@ export class Bot extends DurableObject<Env> {
       horizons: Object.entries(HORIZONS).map(([key, h]) => ({ key, label: h.label, short: h.short })),
       limits: this.limitRows(),
       limitsByMode: { paper: this.limitRows("paper"), live: this.limitRows("live") },
+      learning: { ...this.store.snapshotStats(), enabled: this.settings.snapshotsEnabled },
       modelWeight: { value: this.modelWeight(), dflt: this.settings.modelWeight, options: MODEL_WEIGHT_OPTIONS },
       summary: this.store.summary(view, since),
       testSince,
@@ -311,6 +313,11 @@ export class Bot extends DurableObject<Env> {
     if (!this.keysSet()) return "Add your Kalshi API keys first.";
     const engine = await this.getEngine();
     return (await engine.moveCash(fromShard, toShard, dollars)).message;
+  }
+
+  /** Labelled learning snapshots as CSV. */
+  async learningCsv(): Promise<string> {
+    return this.store.snapshotsCsv();
   }
 
   async setKillSwitch(on: boolean): Promise<void> {

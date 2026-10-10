@@ -82,6 +82,31 @@ const SCHEMA = [
     status TEXT NOT NULL DEFAULT 'resting'
   )`,
   `CREATE INDEX IF NOT EXISTS orders_status ON orders(status)`,
+  // Learning data: a snapshot of every crypto market the bot prices (not just
+  // the ones it bets on), labelled with the real outcome once it settles.
+  `CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    day TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    series TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    strike_type TEXT,
+    floor_strike REAL,
+    cap_strike REAL,
+    close_ts REAL NOT NULL,
+    secs_left REAL NOT NULL,
+    spot REAL NOT NULL,
+    vol REAL NOT NULL,
+    model_p REAL NOT NULL,
+    yes_bid REAL,
+    yes_ask REAL,
+    averaged INTEGER,
+    outcome TEXT,
+    labelled_ts REAL
+  )`,
+  `CREATE INDEX IF NOT EXISTS snapshots_unlabelled ON snapshots(outcome, close_ts)`,
+  `CREATE INDEX IF NOT EXISTS snapshots_day ON snapshots(day)`,
   `CREATE INDEX IF NOT EXISTS ai_day ON ai_forecasts(day)`,
 ];
 
@@ -169,6 +194,42 @@ export class Store {
   }
   settleTrade(id: number, result: string, pnl: number, now: number): void {
     this.sql.exec("UPDATE trades SET result = ?, pnl = ?, settled_ts = ? WHERE id = ?", result, pnl, now, id);
+  }
+
+  // learning data
+  addSnapshot(s: { ts: number; day: string; ticker: string; series: string; asset: string; strike_type: string | null; floor_strike: number | null; cap_strike: number | null; close_ts: number; secs_left: number; spot: number; vol: number; model_p: number; yes_bid: number | null; yes_ask: number | null; averaged: number }): void {
+    const cols = Object.keys(s);
+    this.sql.exec(`INSERT INTO snapshots (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, ...cols.map((c) => (s as any)[c]));
+  }
+  snapshotsToday(day: string): number {
+    return Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM snapshots WHERE day = ?", day).n);
+  }
+  /** Markets with unlabelled snapshots that should have settled by now. */
+  tickersToLabel(now: number, limit = 100): string[] {
+    return this.rows<{ ticker: string }>("SELECT DISTINCT ticker FROM snapshots WHERE outcome IS NULL AND close_ts < ? ORDER BY close_ts LIMIT ?", now - 60, limit).map((r) => r.ticker);
+  }
+  labelSnapshots(ticker: string, outcome: string, now: number): void {
+    this.sql.exec("UPDATE snapshots SET outcome = ?, labelled_ts = ? WHERE ticker = ? AND outcome IS NULL", outcome, now, ticker);
+  }
+  /** Give up on markets that never report a result (e.g. voided) after 3 days. */
+  voidStaleSnapshots(now: number): void {
+    this.sql.exec("UPDATE snapshots SET outcome = 'void', labelled_ts = ? WHERE outcome IS NULL AND close_ts < ?", now, now - 3 * 86400);
+  }
+  pruneSnapshots(now: number, days = 120): void {
+    this.sql.exec("DELETE FROM snapshots WHERE ts < ?", now - days * 86400);
+  }
+  snapshotStats(): { total: number; labelled: number; days: number; first: number | null } {
+    const r = this.one<{ total: number; labelled: number; days: number; first: number | null }>(
+      "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN outcome IN ('yes','no') THEN 1 ELSE 0 END), 0) AS labelled, COUNT(DISTINCT day) AS days, MIN(ts) AS first FROM snapshots",
+    );
+    return { total: Number(r.total), labelled: Number(r.labelled), days: Number(r.days), first: r.first === null ? null : Number(r.first) };
+  }
+  /** Labelled snapshots as CSV, newest first, for analysis outside the bot. */
+  snapshotsCsv(limit = 50000): string {
+    const cols = ["ts", "ticker", "series", "asset", "strike_type", "floor_strike", "cap_strike", "close_ts", "secs_left", "spot", "vol", "model_p", "yes_bid", "yes_ask", "averaged", "outcome"];
+    const rows = this.rows(`SELECT ${cols.join(", ")} FROM snapshots WHERE outcome IN ('yes','no') ORDER BY ts DESC LIMIT ?`, limit);
+    const cell = (v: unknown) => (v === null || v === undefined ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+    return [cols.join(","), ...rows.map((r: any) => cols.map((c) => cell(r[c])).join(","))].join("\n") + "\n";
   }
 
   /** Open filled positions on a market, one per mode and side. */

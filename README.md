@@ -69,6 +69,14 @@ Crypto, sports and AI bets are placed as **maker orders**: a post-only limit bid
 - Arbitrage still takes the ask, because all its legs must fill together.
 - Set `MAKER_STRATEGIES` to `none` to go back to taking the ask everywhere.
 
+## Learning data
+
+The bot records a snapshot of every crypto market it prices, not just the ones it bets on: the model's odds, the market's bid and ask, spot price, volatility and time left. Once the market settles, it adds the real result. That gives hundreds of labelled examples a day. The data is for training a small model that learns how far to trust the bot's own odds versus the market's, by coin, time left and distance to the strike. That model will be used only if it predicts results better than the market price alone.
+
+- At most one snapshot per market every 5 minutes (`SNAPSHOT_EVERY_SECONDS`), skipping markets that are already all but decided, and at most `SNAPSHOT_DAILY_CAP` (10,000) a day. Kept for 120 days.
+- The dashboard's **Learning data** card shows progress and has a CSV download when you're signed in.
+- `SNAPSHOTS_ENABLED=false` turns it off. Trading is unaffected either way.
+
 ## Time limit
 
 On the dashboard you choose how soon a market must close for the bot to trade it:

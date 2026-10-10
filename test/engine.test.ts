@@ -1099,3 +1099,40 @@ test("sell order goes to V2 as a reduce-only IOC on the right side of the book",
 async function again0(engine: any) {
   await engine.tick();
 }
+
+// ------------------------------------------------------------ learning data
+test("learning: every priced crypto market is snapshotted (throttled) and labelled when it settles", async () => {
+  const { engine, store, client, again } = makerSetup({ MAKER_STRATEGIES: "none" });
+  await again();
+  let st = store.snapshotStats();
+  assert.equal(st.total, 1, "the one priceable market");
+  await again(60); // within SNAPSHOT_EVERY_SECONDS: no new row
+  assert.equal(store.snapshotStats().total, 1);
+  await again(300);
+  assert.equal(store.snapshotStats().total, 2);
+  const [row] = (store as any).rows("SELECT * FROM snapshots LIMIT 1");
+  assert.equal(row.asset, "BTC");
+  assert.equal(row.yes_bid, 0.53);
+  assert.ok(row.model_p > 0 && row.model_p < 1);
+
+  // market settles YES
+  client.all[0].result = "yes";
+  (engine as any).clock = () => NOW + 3700;
+  await engine.labelSnapshots(NOW + 3700);
+  st = store.snapshotStats();
+  assert.equal(st.labelled, 2);
+  const csv = store.snapshotsCsv();
+  assert.match(csv.split("\n")[0], /^ts,ticker,series,asset,/);
+  assert.equal(csv.trim().split("\n").length, 3);
+  assert.match(csv, /,yes\n/);
+});
+
+test("learning: respects the daily cap and can be turned off", async () => {
+  const a = makerSetup({ MAKER_STRATEGIES: "none", SNAPSHOT_DAILY_CAP: "1", SNAPSHOT_EVERY_SECONDS: "1" });
+  await a.again();
+  await a.again(5);
+  assert.equal(a.store.snapshotStats().total, 1);
+  const b = makerSetup({ MAKER_STRATEGIES: "none", SNAPSHOTS_ENABLED: "false" });
+  await b.again();
+  assert.equal(b.store.snapshotStats().total, 0);
+});

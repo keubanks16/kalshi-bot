@@ -58,6 +58,13 @@ async function handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
     return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
   }
 
+  if (req.method === "GET" && url.pathname === "/learning.csv") {
+    if (!(await isAuthed(req, env))) return new Response("Sign in first", { status: 401 });
+    return new Response(await stub.learningCsv(), {
+      headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="kalshi-learning-data.csv"', "Cache-Control": "no-store" },
+    });
+  }
+
   if (req.method === "GET" && url.pathname === "/health") {
     const s = await stub.snapshot();
     return Response.json({ alive: s.alive, mode: s.mode, status: s.status, killSwitch: s.killSwitch, horizon: s.horizon, problem: s.problem, lastError: s.lastError, diag: s.diag });

@@ -66,6 +66,9 @@ export interface Settings {
   makerStrategies: string[]; // strategies that rest post-only orders at the bid instead of taking the ask
   makerTtlSeconds: number;
   makerMaxChase: number;
+  snapshotsEnabled: boolean; // record every priced crypto market + its outcome, for learning
+  snapshotEverySeconds: number; // at most one snapshot per market this often
+  snapshotDailyCap: number; // rows per day (Durable Object write budget)
   exitEnabled: boolean; // crypto: sell a position when holding it is clearly worth less than selling
   exitMargin: number; // ...by at least this much per contract, after fees
   exitMinHoldSeconds: number; // ...and only after holding it this long // crypto: how far (dollars) a resting bid may follow the price up, in total // crypto: cancel a resting order after this long
@@ -157,6 +160,9 @@ export function loadSettings(env: Env): Settings {
       .filter((x) => x && x !== "arb" && x !== "none"),
     makerTtlSeconds: num(env, "MAKER_TTL_SECONDS", 120),
     makerMaxChase: num(env, "MAKER_MAX_CHASE", 0.03),
+    snapshotsEnabled: bool(env, "SNAPSHOTS_ENABLED", true),
+    snapshotEverySeconds: num(env, "SNAPSHOT_EVERY_SECONDS", 300),
+    snapshotDailyCap: num(env, "SNAPSHOT_DAILY_CAP", 10000),
     exitEnabled: bool(env, "EXIT_ENABLED", true),
     exitMargin: num(env, "EXIT_MARGIN", 0.03),
     exitMinHoldSeconds: num(env, "EXIT_MIN_HOLD_SECONDS", 20),

@@ -274,6 +274,17 @@ ${modelCard}
 ${priceCard}
 
 ${s.limits.length || s.limitsByMode ? `<div class="card"><div class="k">Spending limits</div>${limitsCard}</div>` : ""}
+${
+  s.learning
+    ? `<div class="card"><div class="k">Learning data</div><div><b>${s.learning.labelled.toLocaleString("en-US")}</b> market snapshots with known outcomes${
+        s.learning.total > s.learning.labelled ? ` · ${(s.learning.total - s.learning.labelled).toLocaleString("en-US")} waiting to settle` : ""
+      }</div><div class="sub" style="margin-top:6px">${
+        s.learning.enabled ? "Recording every crypto market the bot prices, then its real result, to learn how far to trust the model vs the market." : "Recording is off (SNAPSHOTS_ENABLED)."
+      } ${s.learning.labelled < 5000 ? `About ${Math.max(1, Math.ceil((5000 - s.learning.labelled) / 700))} more day(s) until there's enough to train on.` : "Enough to start training."}${
+        opts.authed && s.learning.labelled ? ` <a href="/learning.csv">Download CSV</a>` : ""
+      }</div></div>`
+    : ""
+}
 
 ${testBar}
 ${viewSwitch}
