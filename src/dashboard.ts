@@ -10,6 +10,14 @@ const money = (x: number) => `${x >= 0 ? "+" : "−"}$${Math.abs(x).toFixed(2)}`
 const cls = (x: number | null) => (x === null ? "" : x >= 0 ? "up" : "down");
 const STRATEGY: Record<string, string> = { crypto: "Crypto", arb: "Arbitrage", ai: "AI", sports: "Sports" };
 
+/** How a log line should stand out: actual buys in blue, resting bids lighter, exits green/red. */
+export function logKind(reason: string): "buy" | "post" | "sold-up" | "sold-down" | null {
+  if (/^sold \d+/.test(reason) || /; sold \d+/.test(reason)) return /, -\$/.test(reason) ? "sold-down" : "sold-up";
+  if (/\bbought \d+/.test(reason) || /^maker bid filled/.test(reason)) return "buy";
+  if (/\bposted \d+/.test(reason)) return "post";
+  return null;
+}
+
 export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwordSet: boolean; tab?: "bot" | "picks" }): string {
   const tab = opts.tab ?? "bot";
   // During a deploy the page can update before the bot does, so tolerate
@@ -54,10 +62,13 @@ export function renderDashboard(snap: Snapshot, opts: { authed: boolean; passwor
   const decisions = s.decisions.length
     ? s.decisions
         .map(
-          (d) => `<tr>
+          (d) => {
+            const kind = logKind(String(d.reason ?? ""));
+            return `<tr class="${kind ? `lg lg-${kind}` : ""}">
   <td>${esc(time(d.ts))}</td>
-  <td class="wrap"><b>${esc(STRATEGY[d.strategy] ?? d.strategy)}</b> · ${esc(d.ticker)}<br><span class="sub">${esc(d.reason)}</span></td>
-</tr>`,
+  <td class="wrap"><b>${esc(STRATEGY[d.strategy] ?? d.strategy)}</b> · ${esc(d.ticker)}${kind === "buy" ? ` <span class="tag">BOUGHT</span>` : kind === "sold-up" || kind === "sold-down" ? ` <span class="tag">SOLD</span>` : ""}<br><span class="sub">${esc(d.reason)}</span></td>
+</tr>`;
+          },
         )
         .join("")
     : `<tr><td colspan="2" class="sub">Nothing logged yet.</td></tr>`;
@@ -341,6 +352,13 @@ h1{font-size:20px;margin:4px 0 2px}.sub{color:var(--mute);font-size:12px}
 .k{color:var(--mute);font-size:12px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
 .v{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}.v.small{font-size:16px;font-weight:550}
 .up{color:var(--up)}.down{color:var(--down)}.warn{color:var(--warn)}
+tr.lg td:first-child{border-left:3px solid transparent;padding-left:8px}
+tr.lg-buy td:first-child{border-left-color:var(--accent)}tr.lg-buy .sub{color:var(--accent);font-weight:600}
+tr.lg-post .sub{color:var(--accent);opacity:.75}
+tr.lg-sold-up td:first-child{border-left-color:var(--up)}tr.lg-sold-up .sub{color:var(--up);font-weight:600}
+tr.lg-sold-down td:first-child{border-left-color:var(--down)}tr.lg-sold-down .sub{color:var(--down);font-weight:600}
+.tag{font-size:10px;font-weight:700;letter-spacing:.04em;padding:1px 6px;border-radius:6px;vertical-align:1px;color:#fff}
+tr.lg-buy .tag{background:var(--accent)}tr.lg-sold-up .tag{background:var(--up)}tr.lg-sold-down .tag{background:var(--down)}
 .err{font-size:13px;color:var(--down);margin-top:6px;word-break:break-word}
 table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
 td{text-align:left;padding:8px 4px;border-bottom:1px solid var(--line);vertical-align:top}

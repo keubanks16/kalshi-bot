@@ -1360,3 +1360,26 @@ test("exit: re-reads the bid before selling, and skips if it has dropped too far
   assert.equal((store as any).rows("SELECT COUNT(*) AS n FROM trades WHERE result = 'sold'")[0].n, 0);
   assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /exit skipped: bid moved to \$0\.05/);
 });
+
+test("log lines: buys are blue, resting bids lighter, exits green/red", async () => {
+  const { logKind } = await import("../src/dashboard.ts");
+  assert.equal(logKind("edge +0.050; bought 3 NO @ $0.49 (took the ask: worth it even after the taker fee)"), "buy");
+  assert.equal(logKind("maker bid filled: bought 2 YES @ $0.43"), "buy");
+  assert.equal(logKind("edge +0.040; posted 2 NO @ $0.41 (maker, resting)"), "post");
+  assert.equal(logKind("sold 2 YES @ $0.88 to exit: model now gives it 83%, +$0.74"), "sold-up");
+  assert.equal(logKind("sold 2 YES @ $0.40 to exit: model now gives it 30%, -$0.06"), "sold-down");
+  assert.equal(logKind("cancelled bid for 2 YES @ $0.30: not filled after 2 min"), null);
+  assert.equal(logKind("best in KXBTC: best edge +0.010 on no"), null);
+  assert.equal(logKind("edge +0.043; not bought: not filled"), null);
+  const html = renderDashboard(
+    {
+      mode: "paper", problem: null, status: "ok", lastError: null, alive: true, killSwitch: false, horizon: "day",
+      horizons: [{ key: "day", label: "x" }] as any, limits: [],
+      summary: { trades: 0, settled: 0, wins: 0, pnl: 0, fees: 0, openCost: 0 }, today: 0, byStrategy: [], trades: [],
+      decisions: [{ ts: NOW, strategy: "crypto", ticker: "T", action: "buy_yes", reason: "edge +0.05; bought 2 YES @ $0.40", p_fair: null, price: null }],
+      timezone: "America/New_York", diag: {},
+    } as any,
+    { authed: true, passwordSet: true },
+  );
+  assert.ok(html.includes('class="lg lg-buy"') && html.includes(">BOUGHT</span>"));
+});
