@@ -393,7 +393,7 @@ test("dashboard renders and escapes Kalshi text", async () => {
 
 // ------------------------------------------------------------ maker orders
 function makerSetup(vars: Record<string, string> = {}) {
-  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", MAX_ORDERS_PER_MARKET: "1", ...vars });
+  const s = loadSettings({ BOT: undefined as any, BOT_MODE: "paper", MAX_DAILY_LOSS: "100", MAX_COST_PER_ORDER: "10", ARB_ENABLED: "false", MAKER_STRATEGIES: "crypto", MAX_ORDERS_PER_MARKET: "1", HYBRID_TAKE: "false", ...vars });
   const store = new Store(memorySql());
   const client = new FakeClient();
   const clock = { now: NOW };
@@ -1176,4 +1176,37 @@ test("bids can still go up with a bit over a minute left, and are pulled at 1 mi
   assert.ok(store.restingOrders()[0].expires_ts <= NOW + 90, "set to come down at the 1-minute mark");
   await again(95); // 55s left
   assert.equal(store.restingOrders().length, 0);
+});
+
+// ------------------------------------------------------------ hybrid: take the ask when it's worth it
+test("hybrid: a big edge is bought at the ask right away instead of resting a bid", async () => {
+  const { store, again } = makerSetup({ HYBRID_TAKE: "true" });
+  await again(); // model ~0.75 vs YES ask 0.55: clears 4¢ even after the taker fee
+  assert.equal(store.restingOrders().length, 0, "no resting bid");
+  const [t] = store.openTrades();
+  assert.equal(t.side, "yes");
+  assert.equal(t.price, 0.55, "paid the ask");
+  assert.match(store.recentDecisions(5).map((d: any) => d.reason).join(" | "), /took the ask/);
+});
+
+test("hybrid: a small edge still rests a bid (not worth the taker fee)", async () => {
+  const { engine, store, again } = makerSetup({ HYBRID_TAKE: "true" });
+  (engine.feed as any).spot = async () => 80150; // blended ~0.61: ≥4¢ at the 54¢ bid, <4¢ at the 55¢ ask + fee
+  await again();
+  assert.equal(store.openTrades().length, 0);
+  assert.equal(store.restingOrders().length, 1);
+  assert.equal(store.restingOrders()[0].price, 0.54);
+});
+
+test("hybrid: a resting bid is swapped for the ask when the edge grows enough", async () => {
+  const { engine, store, again } = makerSetup({ HYBRID_TAKE: "true" });
+  (engine.feed as any).spot = async () => 80150;
+  await again();
+  assert.equal(store.restingOrders().length, 1);
+  (engine.feed as any).spot = async () => 80600; // now clearly worth taking
+  await again(10);
+  assert.equal(store.restingOrders().length, 0, "bid pulled");
+  assert.equal(store.openTrades().length, 1);
+  assert.equal(store.openTrades()[0].price, 0.55);
+  assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /taking the ask at \$0\.55 instead/);
 });

@@ -40,6 +40,8 @@ interface BuyOrder {
   note?: string;
   /** Maker orders only: cancel by this time (unix seconds) even if the usual expiry is later. */
   expiresAt?: number;
+  /** Buy at the ask now (taker) even for a maker strategy: the edge is big enough to pay for it. */
+  take?: boolean;
 }
 
 export function tradingDay(epochSeconds: number, timeZone: string): string {
@@ -571,6 +573,20 @@ export class Engine {
             await this.cancelResting(resting, now, `edge at this price is now ${fmtEdge(left)}`);
             continue;
           }
+          // If the bet is now worth buying at the ask (after the taker fee),
+          // stop waiting: pull the bid and take it before it runs away.
+          if (this.s.hybridTake && resting.filled === 0) {
+            const t = this.decideHybrid(m, p, bankroll, limits, "crypto");
+            if (t.take && sideOf(t.d) === resting.side && t.d.price !== undefined) {
+              await this.cancelResting(resting, now, `taking the ask at $${t.d.price.toFixed(2)} instead (edge ${fmtEdge(t.d.edge)} after the taker fee)`);
+              if (!this.store.restingOrders(this.modeFor("crypto")).some((o) => o.ticker === m.ticker)) {
+                const r = await this.enter({ strategy: "crypto", market: m, side: resting.side, contracts: t.d.contracts, price: t.d.price, pFair: resting.side === "yes" ? p : 1 - p, edge: t.d.edge, take: true });
+                this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: t.d.action, reason: `${t.d.reason}; ${r.message}`, p_fair: p, price: t.d.price });
+                st.lastLogged = now;
+              }
+              continue;
+            }
+          }
           // Chase a little: if someone now bids above us (the price moved away),
           // re-post just above them, as long as the bet still clears its edge bar
           // there and we stay within MAKER_MAX_CHASE of the first price.
@@ -587,13 +603,14 @@ export class Engine {
           chase = { side: resting.side, cap, base };
         }
 
-        const d = decideBinary(p, q.yes, q.no, bankroll, { ...limits, takerFeeRate: q.feeRate });
+        const h = chase ? { d: decideBinary(p, q.yes, q.no, bankroll, { ...limits, takerFeeRate: q.feeRate }), take: false } : this.decideHybrid(m, p, bankroll, limits, "crypto");
+        const d = h.d;
         const side = sideOf(d);
         let reason = d.reason;
         if (chase && (side !== chase.side || d.price === undefined || d.price > chase.cap + 1e-9)) continue;
         if (side && d.price !== undefined) {
-          if (this.usesMaker("crypto")) this.chaseBase.set(m.ticker, chase ? chase.base : d.price);
-          const r = await this.enter({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge });
+          if (this.usesMaker("crypto") && !h.take) this.chaseBase.set(m.ticker, chase ? chase.base : d.price);
+          const r = await this.enter({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, take: h.take });
           reason = `${d.reason}; ${r.message}`;
           this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: d.action, reason, p_fair: p, price: d.price });
           st.lastLogged = now;
@@ -674,14 +691,13 @@ export class Engine {
           continue;
         }
         // Best single bet in this game (YES or NO on any team).
-        let best: { m: Market; d: ReturnType<typeof decideBinary>; p: number; outcome: string } | null = null;
+        let best: { m: Market; d: ReturnType<typeof decideBinary>; p: number; outcome: string; take: boolean } | null = null;
         for (const m of ev.markets ?? []) {
           const outcome = map.get(m.ticker);
           const p = outcome ? fair.probs[outcome] : undefined;
           if (p === undefined) continue;
-          const q = this.quotes(m, "sports");
-          const d = decideBinary(p, q.yes, q.no, bankroll, { ...this.s, minEdge: this.s.sportsMinEdge, takerFeeRate: q.feeRate });
-          if (!best || d.edge > best.d.edge) best = { m, d, p, outcome: outcome! };
+          const { d, take } = this.decideHybrid(m, p, bankroll, { ...this.s, minEdge: this.s.sportsMinEdge }, "sports");
+          if (!best || d.edge > best.d.edge) best = { m, d, p, outcome: outcome!, take };
         }
         if (!best) continue;
         const books = `${best.outcome} ${(best.p * 100).toFixed(0)}%`;
@@ -704,6 +720,7 @@ export class Engine {
             note: `${label}: ${fair.source} says ${books}`,
             // never leave a bid resting into the game
             expiresAt: start - this.s.sportsMinMinutesBeforeStart * 60,
+            take: best.take,
           });
           if (r.ok) {
             traded++;
@@ -816,11 +833,10 @@ export class Engine {
     if (f.confidence === "low") {
       action = "no bet: low confidence";
     } else {
-      const q = this.quotes(m, "ai");
-      const d = decideBinary(p, q.yes, q.no, await this.bankroll(this.modeFor("ai")), { ...this.s, minEdge: this.s.aiMinEdge, takerFeeRate: q.feeRate });
+      const { d, take } = this.decideHybrid(m, p, await this.bankroll(this.modeFor("ai")), { ...this.s, minEdge: this.s.aiMinEdge }, "ai");
       const side = sideOf(d);
       if (side && d.price !== undefined) {
-        const r = await this.enter({ strategy: "ai", market: { ...pick, ...m }, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, note: f.summary });
+        const r = await this.enter({ strategy: "ai", market: { ...pick, ...m }, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, note: f.summary, take });
         action = r.ok ? `${r.message} (edge ${fmtEdge(d.edge)})` : `edge ${fmtEdge(d.edge)} but blocked by limits`;
       } else {
         action = `no bet: ${d.reason}`;
@@ -1015,12 +1031,26 @@ export class Engine {
     return { ...makerQuotes(m), feeRate: this.s.makerFeeRate };
   }
 
+  /**
+   * Decide a bet for a maker strategy, hybrid-style: if buying at the ask right
+   * now still clears the edge bar after the taker fee, take it (a resting bid
+   * would likely miss it as the price runs away); otherwise rest a bid.
+   */
+  decideHybrid(m: Market, p: number, bankroll: number, limits: Parameters<typeof decideBinary>[4], strategy: Strategy): { d: ReturnType<typeof decideBinary>; take: boolean } {
+    const q = this.quotes(m, strategy);
+    const dm = decideBinary(p, q.yes, q.no, bankroll, { ...limits, takerFeeRate: q.feeRate });
+    if (!this.usesMaker(strategy) || !this.s.hybridTake) return { d: dm, take: false };
+    const dt = decideBinary(p, dollars(m, "yes_ask"), dollars(m, "no_ask"), bankroll, { ...limits, takerFeeRate: this.s.takerFeeRate });
+    return sideOf(dt) ? { d: dt, take: true } : { d: dm, take: false };
+  }
+
   /** Enter a position the way this strategy is set to: rest a maker bid, or take the ask. */
   async enter(o: BuyOrder): Promise<{ ok: boolean; message: string }> {
     const sideUp = o.side.toUpperCase();
-    if (!this.usesMaker(o.strategy)) {
+    if (!this.usesMaker(o.strategy) || o.take) {
       const filled = await this.buy(o);
-      return filled ? { ok: true, message: `bought ${filled} ${sideUp} @ $${o.price.toFixed(2)}` } : { ok: false, message: `not bought: ${this.skipWhy || "not filled"}` };
+      const how = o.take ? " (took the ask: worth it even after the taker fee)" : "";
+      return filled ? { ok: true, message: `bought ${filled} ${sideUp} @ $${o.price.toFixed(2)}${how}` } : { ok: false, message: `not bought: ${this.skipWhy || "not filled"}` };
     }
     const r = await this.placeMaker(o);
     if (!r.filled && !r.resting) return { ok: false, message: `not posted: ${this.skipWhy || "blocked by limits"}` };
