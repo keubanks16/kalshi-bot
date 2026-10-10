@@ -87,11 +87,11 @@ export function indexPrice(quotes: Quote[]): number {
 }
 
 // ---------------------------------------------------------------- streams
-type SocketFactory = (url: string) => Promise<WebSocket>;
+type SocketFactory = (url: string, headers?: Record<string, string>) => Promise<WebSocket>;
 
 /** Outbound websocket from a Worker / Durable Object (fetch with Upgrade). */
-const workerSocket: SocketFactory = async (url) => {
-  const resp = await fetch(url.replace(/^wss:/, "https:"), { headers: { Upgrade: "websocket" } });
+const workerSocket: SocketFactory = async (url, headers = {}) => {
+  const resp = await fetch(url.replace(/^wss:/, "https:"), { headers: { ...headers, Upgrade: "websocket" } });
   const ws = (resp as any).webSocket as WebSocket | null;
   if (!ws) throw new Error(`websocket upgrade refused by ${new URL(url).host} (${resp.status})`);
   (ws as any).accept();
@@ -118,6 +118,16 @@ export const STREAMS: Record<string, StreamDef> = {
   },
 };
 
+/** CF Benchmarks Real-Time Index ids on Kalshi's 5Hz feed: the exact values Kalshi settles on. */
+export const CF_INDEX: Record<string, string> = { BTC: "BRTI", ETH: "ETHUSD_RTI", SOL: "SOLUSD_RTI", XRP: "XRPUSD_RTI", DOGE: "DOGEUSD_RTI" };
+const CF_FRESH_MS = 3_000; // use the CF value only if a tick arrived this recently
+
+/** Where to connect for the CF feed, and how to sign the handshake (from the Kalshi client). */
+export interface IndexFeedAuth {
+  url: string;
+  headers: () => Promise<Record<string, string> | null>;
+}
+
 export class PriceFeed {
   fetchFn: Fetch;
   requests = 0;
@@ -129,6 +139,14 @@ export class PriceFeed {
   private vols = new Map<string, { vol: number; at: number }>();
   private socketFactory: SocketFactory;
   private connecting = new Set<string>();
+  /** Latest CF Benchmarks index value per asset (received time in ms). */
+  cf = new Map<string, { value: number; at: number; sourceTs: number }>();
+  cfSocket: WebSocket | null = null;
+  cfMessages = 0;
+  cfError: string | null = null;
+  private cfConnecting = false;
+  /** asset -> where the last spot() price came from */
+  spotSource: Record<string, "cf" | "exchanges"> = {};
 
   constructor(fetchFn: Fetch = (...a) => fetch(...a), socketFactory: SocketFactory = workerSocket) {
     this.fetchFn = (...a) => {
@@ -174,6 +192,71 @@ export class PriceFeed {
     }
   }
 
+  /**
+   * Keep Kalshi's CF Benchmarks 5Hz index stream open (BRTI etc.). Safe to
+   * call every round; reconnects if it dropped. No-op without API keys.
+   */
+  async ensureIndexFeed(assets: string[], auth: IndexFeedAuth | null): Promise<void> {
+    if (!auth || this.cfSocket || this.cfConnecting) return;
+    const ids = assets.map((a) => CF_INDEX[a]).filter(Boolean);
+    if (!ids.length) return;
+    this.cfConnecting = true;
+    try {
+      const headers = await auth.headers();
+      if (!headers) {
+        this.cfError = "no Kalshi API keys";
+        return;
+      }
+      const ws = await this.socketFactory(auth.url, headers);
+      const byId = new Map(Object.entries(CF_INDEX).map(([asset, id]) => [id, asset]));
+      ws.addEventListener("message", (ev: MessageEvent) => {
+        try {
+          const m = JSON.parse(String(ev.data));
+          if (m.type === "cfbenchmarks_value_5hz" || m.type === "cfbenchmarks_value") {
+            const asset = byId.get(String(m.msg?.index_id));
+            const value = Number(m.msg?.value_usd);
+            if (asset && value > 0) {
+              this.cfMessages++;
+              this.cf.set(asset, { value, at: Date.now(), sourceTs: Number(m.msg?.source_ts_ms) || Date.now() });
+            }
+          } else if (m.type === "error") {
+            this.cfError = `${m.msg?.code ?? ""} ${m.msg?.msg ?? JSON.stringify(m.msg ?? {})}`.trim();
+          }
+        } catch {
+          /* ignore odd frames */
+        }
+      });
+      const drop = () => {
+        if (this.cfSocket === ws) this.cfSocket = null;
+      };
+      ws.addEventListener("close", (ev: any) => {
+        this.cfError = `stream closed${ev?.code ? ` (${ev.code}${ev.reason ? `: ${ev.reason}` : ""})` : ""}`;
+        drop();
+      });
+      ws.addEventListener("error", drop);
+      ws.send(JSON.stringify({ id: 1, cmd: "subscribe", params: { channels: ["cfbenchmarks_value_5hz"], index_ids: ids } }));
+      this.cfSocket = ws;
+      this.cfError = null;
+    } catch (e) {
+      this.cfError = (e as Error)?.message ?? String(e);
+    } finally {
+      this.cfConnecting = false;
+    }
+  }
+
+  /** The live CF index value for an asset if a tick arrived in the last few seconds. */
+  cfValue(asset: string): number | null {
+    const v = this.cf.get(asset);
+    return v && Date.now() - v.at <= CF_FRESH_MS ? v.value : null;
+  }
+
+  closeIndexFeed(): void {
+    try {
+      this.cfSocket?.close();
+    } catch {}
+    this.cfSocket = null;
+  }
+
   closeStreams(): void {
     for (const ws of this.sockets.values()) {
       try {
@@ -185,6 +268,13 @@ export class PriceFeed {
 
   /** Index price for an asset. Polls exchanges whose streamed quote isn't fresh. Throws if fewer than two answer. */
   async spot(asset: string): Promise<number> {
+    // Kalshi's own CF Benchmarks feed is the exact settlement index: use it when fresh.
+    const cf = this.cfValue(asset);
+    if (cf !== null) {
+      this.spotSource[asset] = "cf";
+      return cf;
+    }
+    this.spotSource[asset] = "exchanges";
     const now = Date.now();
     const have = this.quotes.get(asset);
     const toPoll = Object.keys(REST_QUOTES).filter((ex) => {
@@ -203,6 +293,8 @@ export class PriceFeed {
   }
 
   describe(): string {
+    const fromCf = Object.values(this.spotSource).filter((s) => s === "cf").length;
+    if (fromCf && fromCf === Object.keys(this.spotSource).length) return "Kalshi's CF Benchmarks index (live, 5/sec)";
     const counts = Object.values(this.lastSources).map((s) => s.length);
     const n = counts.length ? Math.max(...counts) : 0;
     const live = this.sockets.size ? `, ${this.sockets.size} live stream${this.sockets.size > 1 ? "s" : ""}` : "";

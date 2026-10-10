@@ -98,3 +98,74 @@ test("fresh streamed quotes skip REST polling for that exchange", async () => {
   await feed.ensureStreams(["BTC"]);
   assert.equal(feed.sockets.size, 2);
 });
+
+// ------------------------------------------------------------ Kalshi CF Benchmarks index feed
+class FakeSocket {
+  sent: any[] = [];
+  listeners: Record<string, ((ev: any) => void)[]> = {};
+  addEventListener(t: string, f: (ev: any) => void) {
+    (this.listeners[t] ??= []).push(f);
+  }
+  send(s: string) {
+    this.sent.push(JSON.parse(s));
+  }
+  close() {
+    this.emit("close", { code: 1000 });
+  }
+  emit(t: string, ev: any) {
+    for (const f of this.listeners[t] ?? []) f(ev);
+  }
+  tick(index_id: string, value: string) {
+    this.emit("message", { data: JSON.stringify({ type: "cfbenchmarks_value_5hz", sid: 1, seq: 1, msg: { index_id, value_usd: value, source_ts_ms: Date.now(), received_at: Date.now() } }) });
+  }
+}
+
+test("CF feed: signed handshake, subscribes to the 5Hz index channel, and spot() uses it with no exchange polling", async () => {
+  const sock = new FakeSocket();
+  const opened: { url: string; headers: any }[] = [];
+  let polls = 0;
+  const feed = new PriceFeed((async () => (polls++, new Response("{}"))) as any, async (url, headers) => (opened.push({ url, headers }), sock as any));
+  await feed.ensureIndexFeed(["BTC", "ETH"], { url: "wss://external-api-ws.kalshi.com/trade-api/ws/v2", headers: async () => ({ "KALSHI-ACCESS-KEY": "k", "KALSHI-ACCESS-SIGNATURE": "s", "KALSHI-ACCESS-TIMESTAMP": "1" }) });
+  assert.equal(opened[0].url, "wss://external-api-ws.kalshi.com/trade-api/ws/v2");
+  assert.equal(opened[0].headers["KALSHI-ACCESS-KEY"], "k");
+  assert.deepEqual(sock.sent[0], { id: 1, cmd: "subscribe", params: { channels: ["cfbenchmarks_value_5hz"], index_ids: ["BRTI", "ETHUSD_RTI"] } });
+
+  sock.tick("BRTI", "82762.40000000");
+  assert.equal(await feed.spot("BTC"), 82762.4);
+  assert.equal(polls, 0, "no exchange requests when the CF value is fresh");
+  assert.equal(feed.spotSource.BTC, "cf");
+  assert.match(feed.describe(), /CF Benchmarks/);
+});
+
+test("CF feed: falls back to the exchanges when it's stale or down, and reconnects after a drop", async () => {
+  const sock = new FakeSocket();
+  let opens = 0;
+  const feed = new PriceFeed(fakeFetch().f, async () => (opens++, sock as any));
+  const auth = { url: "wss://x/trade-api/ws/v2", headers: async () => ({ a: "b" }) };
+  await feed.ensureIndexFeed(["BTC"], auth);
+  sock.tick("BRTI", "90000");
+  feed.cf.get("BTC")!.at = Date.now() - 10_000; // stale
+  const p = await feed.spot("BTC");
+  assert.ok(p > 99 && p < 101, `fell back to exchange index: ${p}`);
+  assert.equal(feed.spotSource.BTC, "exchanges");
+
+  sock.close();
+  assert.equal(feed.cfSocket, null);
+  await feed.ensureIndexFeed(["BTC"], auth);
+  assert.equal(opens, 2, "reconnected");
+});
+
+test("CF feed: needs API keys; reports Kalshi errors", async () => {
+  const feed = new PriceFeed(fakeFetch().f, async () => {
+    throw new Error("should not connect");
+  });
+  await feed.ensureIndexFeed(["BTC"], { url: "wss://x", headers: async () => null });
+  assert.equal(feed.cfSocket, null);
+  assert.equal(feed.cfError, "no Kalshi API keys");
+
+  const sock = new FakeSocket();
+  const f2 = new PriceFeed(fakeFetch().f, async () => sock as any);
+  await f2.ensureIndexFeed(["BTC"], { url: "wss://x", headers: async () => ({}) });
+  sock.emit("message", { data: JSON.stringify({ type: "error", msg: { code: 6, msg: "Unknown channel" } }) });
+  assert.equal(f2.cfError, "6 Unknown channel");
+});

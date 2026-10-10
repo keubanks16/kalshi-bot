@@ -347,6 +347,12 @@ export class Engine {
     }
     this.phase = "checking resting orders";
     await this.manageOrders(now);
+    if (this.s.cryptoEnabled && this.s.cfIndexFeed && this.feed.ensureIndexFeed && this.client.wsHeaders) {
+      this.phase = "connecting CF Benchmarks index feed";
+      await this.feed.ensureIndexFeed(this.s.cryptoAssets, { url: this.client.wsUrl(), headers: () => this.client.wsHeaders() });
+    } else if (this.feed.cfSocket) {
+      this.feed.closeIndexFeed();
+    }
     if (this.s.cryptoEnabled && this.s.liveStreams) {
       this.phase = "connecting price streams";
       await this.feed.ensureStreams?.(this.s.cryptoAssets);

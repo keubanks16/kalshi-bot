@@ -11,6 +11,7 @@ A bot can only find a good trade when it has a source of truth that's better tha
 **1. Crypto price markets** — BTC, ETH, SOL, XRP and DOGE, at any timeframe (15-minute, hourly, daily…) and any strike type: above, below, or between.
 
 - It rebuilds the coin's price the way CF Benchmarks builds the index Kalshi settles on: **order-book mid-prices** from six of the seven constituent exchanges (Coinbase, Kraken, Bitstamp, Gemini, Crypto.com, Bullish; LMAX has no public API), combined as a volume-weighted median. With `LIVE_STREAMS` on, Coinbase and Kraken stream live over websockets; the rest are polled each round.
+- **Preferred price source:** Kalshi's own CF Benchmarks feed (BRTI, ETHUSD_RTI, SOLUSD_RTI, XRPUSD_RTI, DOGEUSD_RTI) over Kalshi's WebSocket, at up to 5 updates a second. That's the exact index these markets settle on. It needs your Kalshi API keys. If it's missing or more than 3 seconds stale, the bot falls back to rebuilding the index from the exchanges as below. `CF_INDEX_FEED=false` turns it off. The **Now** card says which source is in use.
 - It also measures the coin's recent volatility.
 - It computes the probability the price finishes past the strike, accounting for Kalshi's 60-second settlement average.
 - If YES or NO is cheaper than that probability by more than `MIN_EDGE` after fees, it buys. It sizes the bet with quarter-Kelly.

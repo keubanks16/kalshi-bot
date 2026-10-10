@@ -303,6 +303,7 @@ export class Bot extends DurableObject<Env> {
         baseUrl: e?.client.baseUrl ?? null,
         lastKalshiFailure: e?.client.lastFailure ?? null,
         priceRequests: e?.feed.requests ?? 0,
+        cfIndexFeed: e ? { connected: !!e.feed.cfSocket, messages: e.feed.cfMessages, error: e.feed.cfError, values: Object.fromEntries([...e.feed.cf].map(([k, v]) => [k, { value: v.value, ageMs: Date.now() - v.at }])), spotSource: e.feed.spotSource } : null,
         cryptoSeries: e ? [...e.series.keys()] : [],
       },
     };

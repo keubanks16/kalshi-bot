@@ -218,6 +218,24 @@ export class KalshiClient {
     return h;
   }
 
+  /** Kalshi's WebSocket URL for this environment (same host family as REST). */
+  wsUrl(): string {
+    const u = new URL(this.baseUrl);
+    const host = u.host.startsWith("external-api.") ? u.host.replace(/^external-api\./, "external-api-ws.") : u.host;
+    return `wss://${host}/trade-api/ws/v2`;
+  }
+
+  /** Signed handshake headers for the WebSocket (same signing as REST, on the WS path). Null without keys. */
+  async wsHeaders(): Promise<Record<string, string> | null> {
+    if (!this.key || !this.apiKeyId) return null;
+    const ts = String(Date.now());
+    return {
+      "KALSHI-ACCESS-KEY": this.apiKeyId,
+      "KALSHI-ACCESS-TIMESTAMP": ts,
+      "KALSHI-ACCESS-SIGNATURE": await sign(this.key, ts, "GET", new URL(this.wsUrl()).pathname),
+    };
+  }
+
   async request<T = any>(method: string, path: string, params?: Params, body?: unknown): Promise<T> {
     const entries = Object.entries(params ?? {}).filter(([, v]) => v !== undefined && v !== "") as [string, string | number][];
     const qs = entries.length ? "?" + new URLSearchParams(entries.map(([k, v]) => [k, String(v)])) : "";

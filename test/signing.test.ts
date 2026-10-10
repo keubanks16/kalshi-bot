@@ -39,3 +39,10 @@ test("no auth headers without a key", async () => {
   const c = new KalshiClient("https://external-api.kalshi.com/trade-api/v2");
   assert.equal((await c.headers("GET", "/markets"))["KALSHI-ACCESS-KEY"], undefined);
 });
+
+test("WebSocket URL follows the REST host", async () => {
+  const { KalshiClient } = await import("../src/kalshi.ts");
+  assert.equal(new KalshiClient("https://external-api.kalshi.com/trade-api/v2").wsUrl(), "wss://external-api-ws.kalshi.com/trade-api/ws/v2");
+  assert.equal(new KalshiClient("https://demo-api.kalshi.co/trade-api/v2").wsUrl(), "wss://demo-api.kalshi.co/trade-api/ws/v2");
+  assert.equal(await new KalshiClient("https://external-api.kalshi.com/trade-api/v2").wsHeaders(), null, "no keys, no headers");
+});
