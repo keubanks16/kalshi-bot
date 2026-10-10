@@ -142,7 +142,7 @@ export function loadSettings(env: Env): Settings {
 
     minEdge: num(env, "MIN_EDGE", 0.04),
     minArbProfit: num(env, "MIN_ARB_PROFIT", 0.02),
-    minSecondsLeft: num(env, "MIN_SECONDS_LEFT", 120),
+    minSecondsLeft: num(env, "MIN_SECONDS_LEFT", 60),
     minSecondsElapsed: num(env, "MIN_SECONDS_ELAPSED", 60),
     minPrice: num(env, "MIN_PRICE", 0.15),
     maxPrice: num(env, "MAX_PRICE", 0.85),

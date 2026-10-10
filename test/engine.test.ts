@@ -460,7 +460,7 @@ test("maker: crypto pulls a resting bid as soon as the edge at its price is gone
 
 test("maker: never rests a bid into the market's last minutes", async () => {
   const { store, client, again } = makerSetup();
-  client.all[0].close_time = iso(NOW + 125); // 2 min left is the floor
+  client.all[0].close_time = iso(NOW + 65); // 1 min left is the floor
   await again();
   assert.equal(store.restingOrders().length, 0);
 });
@@ -1166,4 +1166,14 @@ test("3 per market: maker bids never stack — one resting bid at a time", async
   await again(10);
   await again(10);
   assert.equal(store.restingOrders().length, 1);
+});
+
+test("bids can still go up with a bit over a minute left, and are pulled at 1 minute", async () => {
+  const { store, client, again } = makerSetup();
+  client.all[0].close_time = iso(NOW + 150); // 2.5 min left
+  await again();
+  assert.equal(store.restingOrders().length, 1, "posted with 2.5 min left");
+  assert.ok(store.restingOrders()[0].expires_ts <= NOW + 90, "set to come down at the 1-minute mark");
+  await again(95); // 55s left
+  assert.equal(store.restingOrders().length, 0);
 });

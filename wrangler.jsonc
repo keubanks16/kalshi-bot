@@ -42,7 +42,7 @@
     "EXIT_ENABLED": "true",         // crypto: sell a position when the model turns against it
     "EXIT_MARGIN": "0.03",          // ...if the bid beats the model's value by 3¢+ per contract after fees
     "MAKER_SLOW_TTL_SECONDS": "1800", // sports and AI: 30 minutes (sports bids always cancel before the game)
-    "MIN_SECONDS_LEFT": "120",
+    "MIN_SECONDS_LEFT": "60",
 
     // Sports: Kalshi game prices vs sportsbook odds (needs the ODDS_API_KEY secret from the-odds-api.com)
     "SPORTS_ENABLED": "true",
