@@ -158,7 +158,7 @@ export function loadSettings(env: Env): Settings {
     cryptoCheapMinEdge: num(env, "CRYPTO_CHEAP_MIN_EDGE", 0.08),
     cryptoYesMinEdge: num(env, "CRYPTO_YES_MIN_EDGE", 0),
     cryptoMaxSpread: num(env, "CRYPTO_MAX_SPREAD", 0.1),
-    minVol: num(env, "MIN_VOL", 0.1),
+    minVol: num(env, "MIN_VOL", 0.07),
     maxVol: num(env, "MAX_VOL", 2.5),
     kellyFraction: num(env, "KELLY_FRACTION", 0.25),
     takerFeeRate: num(env, "TAKER_FEE_RATE", 0.07),
