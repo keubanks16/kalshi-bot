@@ -109,13 +109,18 @@ export interface BinaryLimits {
   /** Contracts priced below this need at least cheapMinEdge (long shots are where the model is least reliable). */
   cheapBelow?: number;
   cheapMinEdge?: number;
+  /** YES bets need at least this much edge (YES buys have been losing more often than the model expects). */
+  yesMinEdge?: number;
   /** Buy at least one contract when the edge clears the bar but the sized bet is under one contract. */
   minOneContract?: boolean;
 }
 
-/** The edge a side must clear at this ask: stricter for cheap long shots when configured. */
-export function requiredEdge(ask: number, s: BinaryLimits): number {
-  return s.cheapBelow !== undefined && s.cheapMinEdge !== undefined && ask < s.cheapBelow ? Math.max(s.minEdge, s.cheapMinEdge) : s.minEdge;
+/** The edge a side must clear at this ask: stricter for cheap long shots and for YES when configured. */
+export function requiredEdge(ask: number, s: BinaryLimits, side?: "yes" | "no"): number {
+  let need = s.minEdge;
+  if (s.cheapBelow !== undefined && s.cheapMinEdge !== undefined && ask < s.cheapBelow) need = Math.max(need, s.cheapMinEdge);
+  if (side === "yes" && s.yesMinEdge !== undefined) need = Math.max(need, s.yesMinEdge);
+  return need;
 }
 
 /** Given a fair P(YES) and the asks, pick the better side if its after-fee edge clears the bar, and size it. */
@@ -131,15 +136,16 @@ export function decideBinary(pYes: number, yesAsk: number | null, noAsk: number 
   ] as const) {
     if (ask === null || !(ask >= s.minPrice && ask <= s.maxPrice)) continue;
     const feePer = takerFee(100, ask, s.takerFeeRate) / 100;
-    const c: Pick = { edge: prob - ask - feePer, need: requiredEdge(ask, s), side, prob, ask };
+    const c: Pick = { edge: prob - ask - feePer, need: requiredEdge(ask, s, side), side, prob, ask };
     if (!best || c.edge > best.edge) best = c;
     if (c.edge >= c.need && (!pick || c.edge > pick.edge)) pick = c;
   }
   if (!best) return hold("no tradable price in range");
 
   if (!pick) {
-    const cheap = best.need > s.minEdge && best.edge >= s.minEdge;
-    return hold(cheap ? `edge ${fmtEdge(best.edge)} on ${best.side} @ $${best.ask.toFixed(2)}, long shot needs ${fmtEdge(best.need)}` : `best edge ${fmtEdge(best.edge)} on ${best.side}`, { price: best.ask, edge: best.edge });
+    const strict = best.need > s.minEdge && best.edge >= s.minEdge;
+    const why = s.cheapBelow !== undefined && best.ask < s.cheapBelow && best.need === Math.max(s.minEdge, s.cheapMinEdge ?? 0) ? "long shot" : "YES";
+    return hold(strict ? `edge ${fmtEdge(best.edge)} on ${best.side} @ $${best.ask.toFixed(2)}, ${why} needs ${fmtEdge(best.need)}` : `best edge ${fmtEdge(best.edge)} on ${best.side}`, { price: best.ask, edge: best.edge });
   }
   best = pick;
   const extra = { price: best.ask, edge: best.edge };

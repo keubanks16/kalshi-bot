@@ -560,7 +560,7 @@ export class Engine {
         }
         this.recordSnapshot(m, series, st.asset, now, secondsLeft, spot, vol, model, yb, ya, averaged);
         const p = blendWithMarket(model, yb, ya, this.s.modelWeight);
-        const limits = { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge };
+        const limits = { ...this.s, cheapBelow: this.s.cryptoCheapBelow, cheapMinEdge: this.s.cryptoCheapMinEdge, yesMinEdge: this.s.cryptoYesMinEdge };
         if (this.s.exitEnabled) await this.maybeExit(m, p, now);
 
         // A resting bid tends to fill just as the price turns against it, so
@@ -571,7 +571,7 @@ export class Engine {
         if (resting) {
           const edgeAt = (price: number) => (resting.side === "yes" ? p : 1 - p) - price - takerFee(100, price, this.s.makerFeeRate) / 100;
           const left = edgeAt(resting.price);
-          if (left < requiredEdge(resting.price, limits)) {
+          if (left < requiredEdge(resting.price, limits, resting.side)) {
             await this.cancelResting(resting, now, `edge at this price is now ${fmtEdge(left)}`);
             continue;
           }
@@ -582,7 +582,7 @@ export class Engine {
             if (t.take && sideOf(t.d) === resting.side && t.d.price !== undefined) {
               await this.cancelResting(resting, now, `taking the ask at $${t.d.price.toFixed(2)} instead (edge ${fmtEdge(t.d.edge)} after the taker fee)`);
               if (!this.store.restingOrders(this.modeFor("crypto")).some((o) => o.ticker === m.ticker)) {
-                const r = await this.enter({ strategy: "crypto", market: m, side: resting.side, contracts: t.d.contracts, price: t.d.price, pFair: resting.side === "yes" ? p : 1 - p, edge: t.d.edge, take: true, edgeBar: (pr) => requiredEdge(pr, limits) });
+                const r = await this.enter({ strategy: "crypto", market: m, side: resting.side, contracts: t.d.contracts, price: t.d.price, pFair: resting.side === "yes" ? p : 1 - p, edge: t.d.edge, take: true, edgeBar: (pr) => requiredEdge(pr, limits, resting.side) });
                 this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: t.d.action, reason: `${t.d.reason}; ${r.message}`, p_fair: p, price: t.d.price });
                 st.lastLogged = now;
               }
@@ -598,7 +598,7 @@ export class Engine {
           const cap = Math.round((base + this.s.makerMaxChase) * 100) / 100;
           const outbid = bestBid !== null && bestBid > resting.price + 0.005;
           if (!outbid || this.s.makerMaxChase <= 0 || resting.filled > 0 || next === null || next <= resting.price + 1e-9 || next > cap + 1e-9) continue;
-          if (edgeAt(next) < requiredEdge(next, limits)) continue;
+          if (edgeAt(next) < requiredEdge(next, limits, resting.side)) continue;
           await this.cancelResting(resting, now, `price moved; re-posting at $${next.toFixed(2)} (chasing up to $${cap.toFixed(2)})`);
           if (this.store.restingOrders(this.modeFor("crypto")).some((o) => o.ticker === m.ticker)) continue; // cancel didn't land yet
           if (this.store.marketExposure(m.ticker, this.modeFor("crypto")).orders >= this.s.maxOrdersPerMarket) continue; // it filled after all
@@ -612,7 +612,7 @@ export class Engine {
         if (chase && (side !== chase.side || d.price === undefined || d.price > chase.cap + 1e-9)) continue;
         if (side && d.price !== undefined) {
           if (this.usesMaker("crypto") && !h.take) this.chaseBase.set(m.ticker, chase ? chase.base : d.price);
-          const r = await this.enter({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, take: h.take, edgeBar: (pr) => requiredEdge(pr, limits) });
+          const r = await this.enter({ strategy: "crypto", market: m, side, contracts: d.contracts, price: d.price, pFair: side === "yes" ? p : 1 - p, edge: d.edge, take: h.take, edgeBar: (pr) => requiredEdge(pr, limits, side) });
           reason = `${d.reason}; ${r.message}`;
           this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: d.action, reason, p_fair: p, price: d.price });
           st.lastLogged = now;

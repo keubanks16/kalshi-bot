@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideBinary, ewmaVol, kellyFraction, planNoArb, probAtLeast, probYesForStrike, takerFee } from "../src/model.ts";
+import { decideBinary, ewmaVol, kellyFraction, planNoArb, probAtLeast, probYesForStrike, requiredEdge, takerFee } from "../src/model.ts";
 
 const limits = { minEdge: 0.04, minPrice: 0.05, maxPrice: 0.95, kellyFraction: 0.25, takerFeeRate: 0.07, maxContractsPerOrder: 10 };
 const close = (a: number, b: number, tol = 1e-6) => assert.ok(Math.abs(a - b) < tol, `${a} != ${b}`);
@@ -106,6 +106,21 @@ test("cheap long shots need a bigger edge when configured", () => {
   assert.equal(decideBinary(0.6, 0.8, 0.23, 100, strict).action, "buy_no");
   // Mid-priced contracts are unaffected
   assert.equal(decideBinary(0.75, 0.6, 0.42, 100, strict).action, "buy_yes");
+});
+
+test("YES needs its own bigger edge when configured; NO keeps the normal bar", () => {
+  const strict = { ...limits, yesMinEdge: 0.08 };
+  // YES @ 40¢ with a 6¢ edge: enough normally, not with the YES bar
+  const held = decideBinary(0.47, 0.4, 0.6, 1000, strict);
+  assert.equal(held.action, "hold");
+  assert.match(held.reason, /YES needs/);
+  assert.equal(decideBinary(0.47, 0.4, 0.6, 1000, limits).action, "buy_yes");
+  // a big enough YES edge still trades
+  assert.equal(decideBinary(0.52, 0.4, 0.6, 1000, strict).action, "buy_yes");
+  // NO @ 40¢ with a 6¢ edge is unaffected
+  assert.equal(decideBinary(0.53, 0.6, 0.4, 1000, strict).action, "buy_no");
+  assert.equal(requiredEdge(0.4, strict, "yes"), 0.08);
+  assert.equal(requiredEdge(0.4, strict, "no"), 0.04);
 });
 
 test("picks the side that clears its own bar, not just the larger edge", () => {

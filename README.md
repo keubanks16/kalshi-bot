@@ -18,6 +18,7 @@ A bot can only find a good trade when it has a source of truth that's better tha
 - It only buys contracts priced 15¢–85¢ by default (editable on the dashboard), skipping long shots and near-sure things where the model is least reliable and fees bite hardest.
 - It skips markets with an empty or one-sided book, or a YES spread wider than 10¢ (`CRYPTO_MAX_SPREAD`). There's no real price to compare against there.
 - Contracts under 30¢ (`CRYPTO_CHEAP_BELOW`) need at least 8¢ of edge (`CRYPTO_CHEAP_MIN_EDGE`) instead of `MIN_EDGE`. Cheap long shots were losing more often than the model expected, so they need a bigger cushion.
+- Crypto YES bets need at least 8¢ of edge (`CRYPTO_YES_MIN_EDGE`) at any price. YES buys went 0 for 7 in early live trading while NO buys mostly won, so YES gets the same cushion as long shots.
 - It skips markets that depend on whether a price is touched at any time, since those can't be priced this way.
 
 **2. Arbitrage on any market** — some events have outcomes where at most one can win, like which month the Fed cuts rates. If the YES bids across those outcomes add up to more than $1, buying NO on each one locks in a profit whatever happens.
@@ -160,6 +161,7 @@ All are in `wrangler.jsonc` → `vars`.
 
 - `MIN_EDGE` — the crypto edge needed after fees. Higher means fewer, more confident trades.
 - `CRYPTO_CHEAP_BELOW` / `CRYPTO_CHEAP_MIN_EDGE` — crypto contracts priced under the first (default 0.30) need at least the second as edge (default 0.08).
+- `CRYPTO_YES_MIN_EDGE` — crypto YES bets need at least this much edge at any price (default 0.08).
 - `MIN_ARB_PROFIT` — the locked-in profit needed per arbitrage set.
 - `CRYPTO_ENABLED` / `ARB_ENABLED` — turn either strategy off.
 - `CRYPTO_ASSETS` — which coins to trade.
