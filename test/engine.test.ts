@@ -1090,7 +1090,7 @@ test("exit: live sells are reduce-only and only book what filled", async () => {
   (engine as any).clock = () => NOW + 60;
   engine.series.forEach((st) => (st.nextCheck = 0));
   await engine.tick();
-  assert.deepEqual(sells, [{ ticker: before.ticker, side: "yes", count: before.contracts, price: 0.5 }]);
+  assert.deepEqual(sells, [{ ticker: before.ticker, side: "yes", count: before.contracts, price: 0.49 }], "fresh 50¢ bid, accepting up to 1¢ less");
   const still = store.openTrades().filter((t) => t.mode === "live").reduce((n, t) => n + t.contracts, 0);
   assert.equal(still, before.contracts - 1, "only the 1 contract that sold is closed");
 });
@@ -1345,4 +1345,18 @@ test("engine saves the CF history once a minute and restores it after a restart"
   e2.feed = { cfHistory: new Map(), cfHistorySnapshot: () => ({}), restoreCfHistory: (x: any) => restored.push(x) } as any;
   e2.persistCfHistory(5_000_000);
   assert.deepEqual(restored, [{ ETH: [[5, 2500]] }]);
+});
+
+test("exit: re-reads the bid before selling, and skips if it has dropped too far", async () => {
+  const { engine, store, client } = setup({ ARB_ENABLED: "false" });
+  await engine.tick();
+  (engine.feed as any).spot = async () => 79500; // model turns against the YES
+  client.all[0].yes_bid_dollars = "0.5000";
+  client.all[0].yes_ask_dollars = "0.5200";
+  (client as any).getMarket = async (t: string) => ({ ...client.all.find((m) => m.ticker === t), yes_bid_dollars: "0.0500" }); // bid collapsed
+  (engine as any).clock = () => NOW + 60;
+  engine.series.forEach((st) => (st.nextCheck = 0));
+  await engine.tick();
+  assert.equal((store as any).rows("SELECT COUNT(*) AS n FROM trades WHERE result = 'sold'")[0].n, 0);
+  assert.match(store.recentDecisions(10).map((d: any) => d.reason).join(" | "), /exit skipped: bid moved to \$0\.05/);
 });

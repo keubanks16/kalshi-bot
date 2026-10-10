@@ -183,31 +183,53 @@ export class Engine {
       const gain = bid - feePer - pSide;
       if (gain < this.s.exitMargin) continue;
       this.exitTriedAt.set(key, now);
+      // Re-read the bid right before selling (round-start quotes go stale in
+      // fast markets), and accept up to TAKE_SLIPPAGE less if the exit still
+      // clears its margin there.
+      let fresh: Market = m;
+      try {
+        fresh = { ...m, ...(await this.client.getMarket(m.ticker)) };
+      } catch (e) {
+        if (e instanceof KalshiError && e.status === 429) throw e;
+      }
+      const freshBid = pos.side === "yes" ? dollars(fresh, "yes_bid") : (dollars(fresh, "no_bid") ?? (dollars(fresh, "yes_ask") === null ? null : Math.round((1 - dollars(fresh, "yes_ask")!) * 100) / 100));
+      const worth = (price: number) => price - takerFee(100, price, this.s.takerFeeRate) / 100 - pSide;
+      if (freshBid === null || !(freshBid > 0) || worth(freshBid) < this.s.exitMargin) {
+        this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: "hold", reason: `exit skipped: bid moved to ${freshBid === null ? "nothing" : "$" + freshBid.toFixed(2)}, no longer clearly better than holding (model ${(pSide * 100).toFixed(0)}%)`, p_fair: p, price: freshBid });
+        continue;
+      }
+      const slipped = Math.max(0.01, Math.round((freshBid - this.s.takeSlippage) * 100) / 100);
+      const sellAt = worth(slipped) >= this.s.exitMargin ? slipped : freshBid;
 
       const sideUp = pos.side.toUpperCase();
       let filled: number;
       let fee: number;
+      let soldAt = freshBid;
       if (pos.mode !== "paper") {
-        const order = await this.sendOrReconcile(m.ticker, (id) => this.client.sellOrder(m.ticker, pos.side, pos.contracts, bid, id));
+        const order = await this.sendOrReconcile(m.ticker, (id) => this.client.sellOrder(m.ticker, pos.side, pos.contracts, sellAt, id));
         if (!order) {
-          this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: "hold", reason: `tried to sell ${pos.contracts} ${sideUp} @ $${bid.toFixed(2)} to exit, but Kalshi didn't take it: ${this.lastError ?? "no reason given"}`, p_fair: p, price: bid });
+          this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: "hold", reason: `tried to sell ${pos.contracts} ${sideUp} @ $${sellAt.toFixed(2)} or better to exit, but Kalshi didn't take it: ${this.lastError ?? "no reason given"}`, p_fair: p, price: sellAt });
           continue;
         }
         filled = Math.min(pos.contracts, orderFilled(order));
-        fee = Number(order.taker_fees_dollars ?? 0) || takerFee(filled, bid, this.s.takerFeeRate);
+        // An IOC sell can fill better than its floor; book the actual average price.
+        const avgYes = Number(order.average_fill_price);
+        if (filled > 0 && avgYes > 0 && avgYes < 1) soldAt = Math.round((pos.side === "yes" ? avgYes : 1 - avgYes) * 10000) / 10000;
+        else soldAt = sellAt;
+        fee = Number(order.taker_fees_dollars ?? 0) || takerFee(filled, soldAt, this.s.takerFeeRate);
         this.cashStale = true;
       } else {
         // Paper: sell into the bid, limited by the size showing there.
-        const raw = m[pos.side === "yes" ? "yes_bid_size_fp" : "yes_ask_size_fp"];
+        const raw = fresh[pos.side === "yes" ? "yes_bid_size_fp" : "yes_ask_size_fp"];
         const shown = raw === undefined || raw === null || raw === "" ? null : Math.floor(Number(raw));
         filled = shown === null ? pos.contracts : Math.min(pos.contracts, shown);
-        fee = takerFee(filled, bid, this.s.takerFeeRate);
+        fee = takerFee(filled, soldAt, this.s.takerFeeRate);
       }
       if (filled < 1) {
-        this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: "hold", reason: `tried to sell ${pos.contracts} ${sideUp} @ $${bid.toFixed(2)} to exit; nothing filled`, p_fair: p, price: bid });
+        this.store.addDecision({ ts: now, strategy: "crypto", ticker: m.ticker, action: "hold", reason: `tried to sell ${pos.contracts} ${sideUp} @ $${sellAt.toFixed(2)} or better to exit; nobody was bidding that much when it arrived`, p_fair: p, price: sellAt });
         continue;
       }
-      const pnl = this.store.closeSold(m.ticker, pos.mode, pos.side, filled, bid, fee, now);
+      const pnl = this.store.closeSold(m.ticker, pos.mode, pos.side, filled, soldAt, fee, now);
       this.bankrollCache.delete(pos.mode as Mode);
       const money = (x: number) => `${x < 0 ? "-" : "+"}$${Math.abs(x).toFixed(2)}`;
       this.store.addDecision({
@@ -215,9 +237,9 @@ export class Engine {
         strategy: "crypto",
         ticker: m.ticker,
         action: "sell",
-        reason: `sold ${filled}${filled < pos.contracts ? ` of ${pos.contracts}` : ""} ${sideUp} @ $${bid.toFixed(2)} to exit${pos.mode === "paper" ? " (paper)" : ""}: model now gives it ${(pSide * 100).toFixed(0)}%, ${money(pnl)}`,
+        reason: `sold ${filled}${filled < pos.contracts ? ` of ${pos.contracts}` : ""} ${sideUp} @ $${soldAt.toFixed(2)} to exit${pos.mode === "paper" ? " (paper)" : ""}: model now gives it ${(pSide * 100).toFixed(0)}%, ${money(pnl)}`,
         p_fair: p,
-        price: bid,
+        price: soldAt,
       });
     }
   }
